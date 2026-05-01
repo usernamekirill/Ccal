@@ -18,3 +18,5 @@ backups/
 .DS_Store
 data/
 tmp/
+# Вложенный clone / лишняя копия проекта (часто с .env) — не коммитить
+caloriebot/
