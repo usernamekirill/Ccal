@@ -4,7 +4,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
-from aiogram.filters import StateFilter
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,9 +46,34 @@ router = Router(name="photo")
 
 _log = logging.getLogger(__name__)
 
-# Inline keyboard stays on the review message while we may switch to ``photo_editing`` (e.g. Изменить).
-# Callbacks must still match that state or buttons (Отмена, Сохранить, …) appear dead.
-_PHOTO_DRAFT_UI = StateFilter(MealStates.photo_review, MealStates.photo_editing)
+_STALE_DRAFT_HINT = (
+    "Черновик недоступен (сессия сброшена или сообщение устарело). "
+    "Отправьте еду снова — фото, голос или текст."
+)
+
+
+async def _reject_if_no_photo_draft(callback: CallbackQuery, state: FSMContext) -> bool:
+    """If FSM lost track of the open draft, tell the user and stop (avoids silent inline buttons)."""
+    data = await state.get_data()
+    if data.get("photo_food_result"):
+        return False
+    await callback.answer(_STALE_DRAFT_HINT, show_alert=True)
+    return True
+
+
+async def _edit_or_answer_followup(
+    callback: CallbackQuery,
+    *,
+    text: str,
+    reply_markup,
+) -> None:
+    """Prefer editing the card in place; fall back to a new message if Telegram rejects edit."""
+    if callback.message is None:
+        return
+    try:
+        await callback.message.edit_text(text, reply_markup=reply_markup)
+    except TelegramBadRequest:
+        await callback.message.answer(text, reply_markup=reply_markup)
 
 
 @router.message(F.photo)
@@ -110,7 +135,7 @@ async def handle_photo(
     )
 
 
-@router.callback_query(F.data == "photo_meal:confirm", _PHOTO_DRAFT_UI)
+@router.callback_query(F.data == "photo_meal:confirm")
 async def confirm_photo_meal(
     callback: CallbackQuery,
     state: FSMContext,
@@ -118,6 +143,8 @@ async def confirm_photo_meal(
     settings: Settings,
 ) -> None:
     """Persist recognized food only after explicit user confirmation."""
+    if await _reject_if_no_photo_draft(callback, state):
+        return
     user = await UserService(session).ensure_user(callback.from_user)
     data = await state.get_data()
     result = _result_from_state(data)
@@ -190,35 +217,54 @@ async def confirm_photo_meal(
     await callback.answer()
 
 
-@router.callback_query(F.data == "photo_meal:cancel", _PHOTO_DRAFT_UI)
+@router.callback_query(F.data == "photo_meal:cancel")
 async def cancel_photo_meal(callback: CallbackQuery, state: FSMContext) -> None:
     """Cancel photo recognition without persisting anything."""
+    if callback.message is None:
+        await callback.answer()
+        return
+    data = await state.get_data()
     await state.clear()
-    await callback.message.edit_text(MEAL_CANCEL_FOLLOWUP, reply_markup=draft_cancelled_keyboard())
     await callback.answer()
+    if data.get("photo_food_result"):
+        await _edit_or_answer_followup(
+            callback,
+            text=MEAL_CANCEL_FOLLOWUP,
+            reply_markup=draft_cancelled_keyboard(),
+        )
+    else:
+        await callback.message.answer(MEAL_CANCEL_FOLLOWUP, reply_markup=draft_cancelled_keyboard())
 
 
-@router.callback_query(F.data == "photo_meal:quick:add", _PHOTO_DRAFT_UI)
+@router.callback_query(F.data == "photo_meal:quick:add")
 async def photo_quick_add(callback: CallbackQuery, state: FSMContext) -> None:
     """Prompt for comma-separated name, grams, calories."""
+    if await _reject_if_no_photo_draft(callback, state):
+        return
     await state.set_state(MealStates.photo_editing)
     await state.update_data(photo_edit_action="add")
-    await callback.message.answer(PHOTO_QUICK_ADD_TEXT)
     await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(PHOTO_QUICK_ADD_TEXT)
 
 
-@router.callback_query(F.data == "photo_meal:quick:delete", _PHOTO_DRAFT_UI)
+@router.callback_query(F.data == "photo_meal:quick:delete")
 async def photo_quick_delete(callback: CallbackQuery, state: FSMContext) -> None:
     """Prompt for 1-based item index to delete."""
+    if await _reject_if_no_photo_draft(callback, state):
+        return
     await state.set_state(MealStates.photo_editing)
     await state.update_data(photo_edit_action="delete")
-    await callback.message.answer(PHOTO_QUICK_DELETE_TEXT)
     await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(PHOTO_QUICK_DELETE_TEXT)
 
 
-@router.callback_query(F.data.startswith("photo_meal:edit:"), _PHOTO_DRAFT_UI)
+@router.callback_query(F.data.startswith("photo_meal:edit:"))
 async def choose_photo_edit(callback: CallbackQuery, state: FSMContext) -> None:
     """Ask user for a natural-language edit of the recognition result."""
+    if await _reject_if_no_photo_draft(callback, state):
+        return
     action = callback.data.rsplit(":", maxsplit=1)[1]
     if action != "flex":
         await callback.answer()
@@ -228,8 +274,9 @@ async def choose_photo_edit(callback: CallbackQuery, state: FSMContext) -> None:
         return
     await state.set_state(MealStates.photo_editing)
     await state.update_data(photo_edit_action=action)
-    await callback.message.answer(PHOTO_EDIT_FLEX_TEXT)
     await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(PHOTO_EDIT_FLEX_TEXT)
 
 
 @router.message(MealStates.photo_editing, F.text)
