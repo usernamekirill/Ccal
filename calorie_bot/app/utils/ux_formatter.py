@@ -2,7 +2,7 @@
 
 from calorie_bot.app.ai.schemas import FoodRecognitionResult
 from calorie_bot.app.domain import MealType
-from calorie_bot.app.utils.nutrition_formatter import format_item_block
+from calorie_bot.app.utils.nutrition_formatter import format_item_block, meal_has_unknown_portion_items
 
 
 def _meal_type_ru(value: str | None) -> str | None:
@@ -17,7 +17,7 @@ def _meal_type_ru(value: str | None) -> str | None:
     return labels.get(value)
 
 
-def _mid_item_calories(item):  # FoodItemRecognition
+def _mid_item_calories(item) -> int:  # FoodItemRecognition
     if item.calories is not None:
         return item.calories
     if item.calories_min is not None and item.calories_max is not None:
@@ -35,8 +35,11 @@ def format_meal_review(
     body = "\n\n".join(blocks)
     lines: list[str] = [body, ""]
 
+    unknown_any = meal_has_unknown_portion_items(result.items)
     if result.total_calories_min is not None and result.total_calories_max is not None:
         lines.append(f"Итого: ≈ {result.total_calories_min}–{result.total_calories_max} ккал")
+    elif unknown_any and result.total_calories == 0:
+        lines.append("Итого: уточните порции, чтобы посчитать калории")
     else:
         lines.append(f"Итого: ≈ {result.total_calories} ккал")
 
@@ -63,6 +66,8 @@ def format_saved_brief(result: FoodRecognitionResult) -> str:
         block = "\n".join(format_item_block(it))
         if result.total_calories_min is not None and result.total_calories_max is not None:
             total = f"Итого: ≈ {result.total_calories_min}–{result.total_calories_max} ккал"
+        elif meal_has_unknown_portion_items(result.items) and result.total_calories == 0:
+            total = "Итого: без точной порции калории не считаем"
         else:
             total = f"Итого: ≈ {result.total_calories} ккал"
         return f"{block}\n\n{total}"
@@ -79,6 +84,8 @@ def format_saved_brief(result: FoodRecognitionResult) -> str:
             lines.append(f"• {it.name} — порция уточняется")
     if result.total_calories_min is not None and result.total_calories_max is not None:
         lines.append(f"\nИтого: ≈ {result.total_calories_min}–{result.total_calories_max} ккал")
+    elif meal_has_unknown_portion_items(result.items) and result.total_calories == 0:
+        lines.append("\nИтого: уточните порции для точной суммы")
     else:
         lines.append(f"\nИтого: ≈ {result.total_calories} ккал")
     return "\n".join(lines)

@@ -93,7 +93,9 @@ def test_grams_source_user_not_overwritten_by_lower_rank_merge() -> None:
     [
         (0.5, "рис", True),
         (0.55, "торт", True),
+        (0.72, "торт", True),
         (0.8, "торт", False),
+        (0.5, "салат", True),
         (0.7, "салат", False),
     ],
 )
@@ -149,6 +151,85 @@ def test_format_unknown_portion_requests_weight() -> None:
     text = ux_formatter.format_meal_review(r)
     assert "Порция неясна" in text
     assert "50 г" in text
+
+
+def test_phantom_calories_cleared_without_portion_mass() -> None:
+    """Legacy rows with kcal but no grams/range must not show fake precision."""
+    svc = CalorieService()
+    r = FoodRecognitionResult(
+        items=[
+            FoodItemRecognition(
+                name="булка",
+                portion_description="порция",
+                estimated_grams=None,
+                grams_min=None,
+                grams_max=None,
+                calories=250,
+                calories_per_100g=400,
+                food_confidence=0.6,
+                portion_confidence=0.3,
+            ),
+        ],
+        total_calories=250,
+        overall_confidence=0.5,
+        comment="ok",
+    )
+    out = svc.validate_food_result(r)
+    assert out.items[0].calories is None
+    assert out.total_calories == 0
+    assert out.items[0].needs_portion_clarification is True
+
+
+def test_macros_hidden_for_ai_estimate_low_portion_confidence() -> None:
+    """Оценочная порция с низкой уверенностью: ккал с ≈, без строки БЖУ."""
+    from calorie_bot.app.utils.nutrition_formatter import format_item_block
+
+    item = FoodItemRecognition(
+        name="курица",
+        portion_description="150 г",
+        estimated_grams=150,
+        calories=220,
+        protein=30,
+        fat=10,
+        carbs=0,
+        calories_per_100g=146.7,
+        protein_per_100g=20,
+        fat_per_100g=6.7,
+        carbs_per_100g=0,
+        grams_source="ai_photo",
+        is_estimated=True,
+        portion_confidence=0.55,
+        food_confidence=0.82,
+    )
+    block = "\n".join(format_item_block(item))
+    assert "Б " not in block
+    assert "~150" in block
+    assert "≈ 220" in block
+
+
+def test_macros_shown_for_user_grams() -> None:
+    from calorie_bot.app.utils.nutrition_formatter import format_item_block
+
+    item = FoodItemRecognition(
+        name="курица",
+        portion_description="150 г",
+        estimated_grams=150,
+        calories=220,
+        protein=30,
+        fat=10,
+        carbs=0,
+        calories_per_100g=146.7,
+        protein_per_100g=20,
+        fat_per_100g=6.7,
+        carbs_per_100g=0,
+        grams_source="user",
+        is_estimated=False,
+        portion_confidence=1.0,
+        food_confidence=1.0,
+    )
+    block = "\n".join(format_item_block(item))
+    assert "220 ккал" in block
+    assert "Б 30" in block
 
 
 def test_ordinal_first_item_gets_grams() -> None:

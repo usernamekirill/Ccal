@@ -1,9 +1,22 @@
 """Pure nutrition math: kcal and macros from per-100g values and mass (point or range).
 
 Used by CalorieService and tests. Does not apply user-priority rules — only arithmetic.
+
+Nutritionist rule: **no mass → no energy / macros** (no pseudo-precision from density alone).
 """
 
 from __future__ import annotations
+
+
+def has_quantified_portion_mass(
+    estimated_grams: float | None,
+    grams_min: float | None,
+    grams_max: float | None,
+) -> bool:
+    """True if we have a single mass or a closed gram range suitable for KBJU math."""
+    if estimated_grams is not None:
+        return True
+    return grams_min is not None and grams_max is not None
 
 
 def calories_from_per_100g(kcal_per_100g: float, grams: float) -> int:

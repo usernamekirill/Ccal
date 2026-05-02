@@ -6,8 +6,9 @@ from calorie_bot.app.states.meal import MealStates
 
 
 async def has_active_photo_draft_fsm(state: FSMContext) -> bool:
-    """True when user is reviewing an AI food draft (not mid-typed clarifying question)."""
-    return await state.get_state() == MealStates.photo_review.state
+    """True when a Telegram review/edit draft is open (preview or awaiting typed correction)."""
+    st = await state.get_state()
+    return st in (MealStates.photo_review.state, MealStates.photo_editing.state)
 
 
 async def has_photo_food_result_data(state: FSMContext) -> bool:

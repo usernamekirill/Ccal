@@ -201,6 +201,9 @@ class StatsTodayView:
     meals_count: int
     food_sections: list[str]
     has_approximate_values: bool = False
+    total_calories_min: int | None = None
+    total_calories_max: int | None = None
+    estimated_meals_ratio: float | None = None
 
 
 @dataclass(frozen=True)

@@ -29,7 +29,14 @@ def format_today_status_line(view: StatsTodayView) -> str:
 def format_today_stats(view: StatsTodayView) -> str:
     """Render today's calories, goal, progress, meals, and food list."""
     approx = getattr(view, "has_approximate_values", False)
-    eaten_label = f"Съедено: ~{view.total_calories} ккал" if approx else f"Съедено: {view.total_calories} ккал"
+    cmin = getattr(view, "total_calories_min", None)
+    cmax = getattr(view, "total_calories_max", None)
+    if cmin is not None and cmax is not None:
+        eaten_label = f"Съедено: ~{cmin}–{cmax} ккал (диапазон по порциям)"
+    elif approx:
+        eaten_label = f"Съедено: ~{view.total_calories} ккал"
+    else:
+        eaten_label = f"Съедено: {view.total_calories} ккал"
     lines = [eaten_label]
     if view.calorie_target is not None:
         lines.append(f"Цель: {view.calorie_target} ккал")
@@ -57,6 +64,10 @@ def format_today_stats(view: StatsTodayView) -> str:
     if getattr(view, "has_approximate_values", False):
         lines.append("")
         lines.append("Часть значений примерная (оценка порции).")
+        ratio = getattr(view, "estimated_meals_ratio", None)
+        if ratio is not None and 0 < ratio < 1:
+            pct = int(round(100 * ratio))
+            lines.append(f"Около {pct}% приёмов с оценочными порциями.")
 
     return "\n".join(lines)
 

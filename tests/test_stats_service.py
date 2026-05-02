@@ -60,6 +60,10 @@ def _meal(
     eaten_at: datetime,
     total_calories: int,
     item_calories: int | None = None,
+    *,
+    total_calories_min: int | None = None,
+    total_calories_max: int | None = None,
+    has_estimated_items: bool = False,
 ) -> SimpleNamespace:
     """Build a lightweight meal row."""
     kcal = item_calories if item_calories is not None else total_calories
@@ -67,6 +71,9 @@ def _meal(
         user_id=user_id,
         eaten_at=eaten_at,
         total_calories=total_calories,
+        total_calories_min=total_calories_min,
+        total_calories_max=total_calories_max,
+        has_estimated_items=has_estimated_items,
         items=[SimpleNamespace(name="тест", calories=kcal)],
     )
 
@@ -99,6 +106,39 @@ async def test_today_view_shows_goal_progress_and_food() -> None:
     assert "500" in body
     assert "2000" in body
     assert "Прогресс:" in body
+
+
+@pytest.mark.asyncio
+async def test_today_view_calorie_band_and_estimated_ratio() -> None:
+    """Meals with calorie min/max produce a day band; estimated_meals_ratio is filled."""
+    m1 = _meal(
+        1,
+        datetime(2026, 4, 30, 10, 15, tzinfo=TZ),
+        200,
+        total_calories_min=180,
+        total_calories_max=220,
+        has_estimated_items=True,
+    )
+    m2 = _meal(
+        1,
+        datetime(2026, 4, 30, 14, 0, tzinfo=TZ),
+        300,
+        has_estimated_items=False,
+    )
+    service = StatsService(
+        stats_repository=FakeStatsRepository([m1, m2]),
+        profile_repository=FakeProfileRepository(calorie_target=2000),
+        default_timezone="Europe/Moscow",
+        now_factory=lambda tz: datetime(2026, 4, 30, 18, 0, tzinfo=tz),
+    )
+    view = await service.today_view(1)
+
+    assert view.total_calories == 500
+    assert view.total_calories_min == 480
+    assert view.total_calories_max == 520
+    assert view.estimated_meals_ratio == 0.5
+    txt = format_today_stats(view)
+    assert "480" in txt and "520" in txt
 
 
 @pytest.mark.asyncio

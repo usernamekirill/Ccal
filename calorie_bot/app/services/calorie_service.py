@@ -11,7 +11,7 @@ from calorie_bot.app.ai.schemas import (
 from calorie_bot.app.domain import GramsSource, MealDraft, MealItemDraft, MealSource, MealType
 from calorie_bot.app.repositories.food_cache_repository import FoodCacheRepository
 from calorie_bot.app.services import portion_estimator
-from calorie_bot.app.services.nutrition_calculator import calories_from_per_100g
+from calorie_bot.app.services.nutrition_calculator import calories_from_per_100g, has_quantified_portion_mass
 from calorie_bot.app.utils import ux_formatter
 
 LOW_CONFIDENCE_THRESHOLD = 0.65
@@ -268,7 +268,7 @@ class CalorieService:
         return self._apply_portion_clarification_rules(item)
 
     def _apply_portion_clarification_rules(self, item: FoodItemRecognition) -> FoodItemRecognition:
-        """Set needs_portion_clarification from dense-food heuristics."""
+        """Set needs_portion_clarification: low portion confidence or calorie-dense foods."""
         if item.grams_source in (
             GramsSource.USER.value,
             GramsSource.TEXT_CORRECTION.value,
@@ -276,7 +276,12 @@ class CalorieService:
         ):
             return item.model_copy(update={"needs_portion_clarification": False})
         dense = portion_estimator.is_calorie_dense_food(item.name)
-        need = item.portion_confidence < 0.6 or (dense and item.portion_confidence < 0.75)
+        weak_portion = item.portion_confidence < 0.6
+        from_default_or_unknown = item.grams_source in (
+            GramsSource.DEFAULT_PORTION.value,
+            GramsSource.UNKNOWN.value,
+        )
+        need = weak_portion or (dense and (from_default_or_unknown or item.portion_confidence < 0.75))
         return item.model_copy(update={"needs_portion_clarification": need})
 
     def merge_ai_grams_if_weaker_source(
@@ -562,6 +567,24 @@ class CalorieService:
         patched_items: list[FoodItemRecognition] = []
         for item in result.items:
             item = self._backfill_legacy_item(item)
+            if not has_quantified_portion_mass(item.estimated_grams, item.grams_min, item.grams_max):
+                item = item.model_copy(
+                    update={
+                        "calories": None,
+                        "calories_min": None,
+                        "calories_max": None,
+                        "protein": None,
+                        "fat": None,
+                        "carbs": None,
+                        "protein_min": None,
+                        "protein_max": None,
+                        "fat_min": None,
+                        "fat_max": None,
+                        "carbs_min": None,
+                        "carbs_max": None,
+                        "needs_portion_clarification": True,
+                    }
+                )
             if item.calories is not None:
                 self.validate_calories(item.calories)
             if item.calories_min is not None:

@@ -51,7 +51,25 @@ class StatsService:
         remaining = (target - total) if target is not None else None
         progress = (100.0 * total / target) if target and target > 0 else None
 
+        t_lo = sum(
+            m.total_calories_min if m.total_calories_min is not None else m.total_calories
+            for m in meals
+        )
+        t_hi = sum(
+            m.total_calories_max if m.total_calories_max is not None else m.total_calories
+            for m in meals
+        )
+        has_calorie_band = bool(meals) and t_lo != t_hi
+        estimated_ratio = (
+            sum(1 for m in meals if getattr(m, "has_estimated_items", False)) / len(meals)
+            if meals
+            else None
+        )
+
         sections = _meal_food_sections(meals, tz)
+        has_approx = any(getattr(m, "has_estimated_items", False) for m in meals) or (
+            estimated_ratio is not None and estimated_ratio > 0
+        )
         return StatsTodayView(
             total_calories=total,
             calorie_target=target,
@@ -59,7 +77,10 @@ class StatsService:
             progress_percent=progress,
             meals_count=len(meals),
             food_sections=sections,
-            has_approximate_values=any(getattr(m, "has_estimated_items", False) for m in meals),
+            has_approximate_values=has_approx,
+            total_calories_min=t_lo if has_calorie_band else None,
+            total_calories_max=t_hi if has_calorie_band else None,
+            estimated_meals_ratio=estimated_ratio,
         )
 
     async def week_view(self, user_id: int) -> StatsWeekView:
