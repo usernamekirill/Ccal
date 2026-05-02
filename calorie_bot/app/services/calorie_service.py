@@ -8,7 +8,14 @@ from calorie_bot.app.ai.schemas import (
     VisionPhotoAnalysisItem,
     VisionPhotoAnalysisResult,
 )
-from calorie_bot.app.domain import GramsSource, MealDraft, MealItemDraft, MealSource, MealType
+from calorie_bot.app.domain import (
+    GramsSource,
+    MealDraft,
+    MealItemDraft,
+    MealSource,
+    MealType,
+    PortionUnitType,
+)
 from calorie_bot.app.repositories.food_cache_repository import FoodCacheRepository
 from calorie_bot.app.services import portion_estimator
 from calorie_bot.app.services.nutrition_calculator import calories_from_per_100g, has_quantified_portion_mass
@@ -26,6 +33,7 @@ _GRAMS_SOURCE_RANK: dict[str, int] = {
     GramsSource.TEXT_CORRECTION.value: 5,
     GramsSource.VOICE_CORRECTION.value: 5,
     GramsSource.USER.value: 5,
+    GramsSource.USER_QUANTITY.value: 5,
 }
 
 
@@ -271,6 +279,7 @@ class CalorieService:
         """Set needs_portion_clarification: low portion confidence or calorie-dense foods."""
         if item.grams_source in (
             GramsSource.USER.value,
+            GramsSource.USER_QUANTITY.value,
             GramsSource.TEXT_CORRECTION.value,
             GramsSource.VOICE_CORRECTION.value,
         ):
@@ -347,7 +356,7 @@ class CalorieService:
                     grams=item.estimated_grams,
                     grams_min=item.grams_min,
                     grams_max=item.grams_max,
-            grams_source=_grams_source_from_str(item.grams_source),
+                    grams_source=_grams_source_from_str(item.grams_source),
                     calories=item.calories,
                     calories_min=item.calories_min,
                     calories_max=item.calories_max,
@@ -369,6 +378,10 @@ class CalorieService:
                     needs_portion_clarification=item.needs_portion_clarification,
                     is_estimated=item.is_estimated,
                     confidence=item.confidence,
+                    quantity=item.quantity,
+                    unit_type=item.unit_type,
+                    unit_weight_grams=item.unit_weight_grams,
+                    size_modifier=item.size_modifier,
                 )
             )
         normalized_items = [self.validate_item(item) for item in items]
@@ -417,6 +430,10 @@ class CalorieService:
                 needs_portion_clarification=item.needs_portion_clarification,
                 is_estimated=item.is_estimated,
                 confidence=item.confidence or 1,
+                quantity=item.quantity,
+                unit_type=item.unit_type,
+                unit_weight_grams=item.unit_weight_grams,
+                size_modifier=item.size_modifier,
             )
             for item in draft.items
         ]
@@ -479,6 +496,17 @@ class CalorieService:
         from calorie_bot.app.services.food_parser_service import apply_user_gram_priority
 
         return apply_user_gram_priority(user_text, result, self, grams_source=grams_source)
+
+    def apply_user_quantity_resolution(
+        self,
+        user_text: str | None,
+        result: FoodRecognitionResult,
+    ) -> FoodRecognitionResult:
+        """Apply countable-portion parsing (штуки / ломтики / «половина») when no explicit grams."""
+        from calorie_bot.app.services.food_parser_service import apply_user_quantity_from_text
+
+        out, _ = apply_user_quantity_from_text(user_text, result, self)
+        return out
 
     async def get_or_estimate_food(
         self,
@@ -725,6 +753,10 @@ class CalorieService:
                     "portion_description": f"{grams:.0f} г",
                     "grams_source": grams_source,
                     "needs_portion_clarification": False,
+                    "quantity": None,
+                    "unit_type": None,
+                    "unit_weight_grams": None,
+                    "size_modifier": None,
                     "is_estimated": grams_source
                     not in (
                         GramsSource.USER.value,
@@ -752,6 +784,90 @@ class CalorieService:
                     "portion_description": f"{grams:.0f} г",
                     "grams_source": grams_source,
                     "needs_portion_clarification": False,
+                    "quantity": None,
+                    "unit_type": None,
+                    "unit_weight_grams": None,
+                    "size_modifier": None,
+                }
+            )
+        items = list(result.items)
+        items[index - 1] = self._apply_portion_clarification_rules(new_item)
+        return self._rebuild(result.model_copy(update={"items": items}))
+
+    def apply_quantity_to_item(
+        self,
+        result: FoodRecognitionResult,
+        index: int,
+        *,
+        quantity: float,
+        unit_type: str,
+        unit_weight_grams: float,
+        total_grams: float,
+        size_modifier: str | None,
+        grams_source: str = GramsSource.USER_QUANTITY.value,
+    ) -> FoodRecognitionResult:
+        """Recalculate macros from per-100g using a count-based portion (reference unit mass)."""
+        self.validate_grams(total_grams)
+        if quantity <= 0:
+            raise ValueError("quantity_must_be_positive")
+        item = self._item_at(result, index)
+        per = item.calories_per_100g
+        portion_text = _format_quantity_portion_description(quantity, unit_type, total_grams)
+        if per is not None:
+            cal = self.calculate_item_calories(per, total_grams)
+            new_item = item.model_copy(
+                update={
+                    "estimated_grams": total_grams,
+                    "grams_min": None,
+                    "grams_max": None,
+                    "calories": cal,
+                    "calories_min": None,
+                    "calories_max": None,
+                    "protein": _from_per_100g(item.protein_per_100g, total_grams),
+                    "fat": _from_per_100g(item.fat_per_100g, total_grams),
+                    "carbs": _from_per_100g(item.carbs_per_100g, total_grams),
+                    "protein_min": None,
+                    "protein_max": None,
+                    "fat_min": None,
+                    "fat_max": None,
+                    "carbs_min": None,
+                    "carbs_max": None,
+                    "portion_description": portion_text,
+                    "grams_source": grams_source,
+                    "needs_portion_clarification": False,
+                    "is_estimated": True,
+                    "quantity": quantity,
+                    "unit_type": unit_type,
+                    "unit_weight_grams": unit_weight_grams,
+                    "size_modifier": size_modifier,
+                    "portion_confidence": 0.9,
+                }
+            )
+        else:
+            base_g = item.estimated_grams or item.grams_max or item.grams_min or 1
+            ratio = total_grams / float(base_g) if base_g else 1.0
+            mid_cal = recognition_item_mid_calories(item)
+            new_cal = max(0, round(mid_cal * ratio))
+            new_item = item.model_copy(
+                update={
+                    "estimated_grams": total_grams,
+                    "grams_min": None,
+                    "grams_max": None,
+                    "calories": new_cal,
+                    "calories_min": None,
+                    "calories_max": None,
+                    "protein": _scale_optional(item.protein, ratio),
+                    "fat": _scale_optional(item.fat, ratio),
+                    "carbs": _scale_optional(item.carbs, ratio),
+                    "portion_description": portion_text,
+                    "grams_source": grams_source,
+                    "needs_portion_clarification": False,
+                    "is_estimated": True,
+                    "quantity": quantity,
+                    "unit_type": unit_type,
+                    "unit_weight_grams": unit_weight_grams,
+                    "size_modifier": size_modifier,
+                    "portion_confidence": 0.9,
                 }
             )
         items = list(result.items)
@@ -836,6 +952,16 @@ def _scale_optional(value: float | None, ratio: float) -> float | None:
 
 def _portion_text(grams: float | None) -> str:
     return f"{grams:.0f} г" if grams is not None else "порция"
+
+
+def _format_quantity_portion_description(quantity: float, unit_type: str, total_grams: float) -> str:
+    """Stable portion line stored on the item (UX is rendered in ``nutrition_formatter``)."""
+    q_display = int(quantity) if abs(quantity - round(quantity)) < 1e-9 else quantity
+    if unit_type == PortionUnitType.SLICE.value:
+        return f"{q_display} ломт. (~{total_grams:.0f} г)"
+    if unit_type == PortionUnitType.PORTION.value:
+        return f"{q_display} порц. (~{total_grams:.0f} г)"
+    return f"{q_display} шт (~{total_grams:.0f} г)"
 
 
 def _from_per_100g(value: float | None, grams: float) -> float | None:

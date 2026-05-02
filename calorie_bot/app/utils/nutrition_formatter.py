@@ -5,10 +5,40 @@ from __future__ import annotations
 from calorie_bot.app.ai.schemas import FoodItemRecognition
 from calorie_bot.app.services.nutrition_calculator import has_quantified_portion_mass
 
+_ITEM_EMOJI: tuple[tuple[str, str], ...] = (
+    ("яблоко", "🍎"),
+    ("банан", "🍌"),
+    ("апельсин", "🍊"),
+    ("груша", "🍐"),
+    ("хлеб", "🍞"),
+    ("яйцо", "🥚"),
+)
+
+
+def _item_emoji(name: str) -> str:
+    low = name.lower()
+    for key, emoji in _ITEM_EMOJI:
+        if key in low:
+            return emoji
+    return "🍽"
+
+
+def _title_case_ru(name: str) -> str:
+    if not name:
+        return name
+    return name[0].upper() + name[1:]
+
+
+def _format_qty_display(quantity: float) -> str:
+    if abs(quantity - round(quantity)) < 1e-9:
+        return str(int(round(quantity)))
+    return str(quantity).replace(".", ",")
+
 
 def _portion_is_exact_user(item: FoodItemRecognition) -> bool:
     return item.estimated_grams is not None and item.grams_source in (
         "user",
+        "user_quantity",
         "text_correction",
         "voice_correction",
     )
@@ -42,18 +72,38 @@ def _show_item_macros(item: FoodItemRecognition) -> bool:
 
 def format_item_block(item: FoodItemRecognition) -> list[str]:
     """Build human-readable lines for a single recognized item (emoji + mass + kcal + macros)."""
-    emoji = "🍽"
+    emoji = _item_emoji(item.name)
+    title = _title_case_ru(item.name)
     lines: list[str] = []
 
-    if item.estimated_grams is not None:
+    used_quantity_line = False
+    if (
+        item.quantity is not None
+        and item.grams_source == "user_quantity"
+        and item.estimated_grams is not None
+        and item.unit_type
+    ):
+        qd = _format_qty_display(item.quantity)
+        g = item.estimated_grams
+        if item.unit_type == "piece":
+            lines.append(f"{emoji} {title} — {qd} шт (~{g:.0f} г)")
+            used_quantity_line = True
+        elif item.unit_type == "slice":
+            lines.append(f"{emoji} {title} — {qd} ломт. (~{g:.0f} г)")
+            used_quantity_line = True
+        elif item.unit_type == "portion":
+            lines.append(f"{emoji} {title} — {qd} порц. (~{g:.0f} г)")
+            used_quantity_line = True
+
+    if not used_quantity_line and item.estimated_grams is not None:
         if _portion_is_exact_user(item) or _portion_is_exact_confident_ai(item):
-            lines.append(f"{emoji} {item.name} — {item.estimated_grams:.0f} г")
+            lines.append(f"{emoji} {title} — {item.estimated_grams:.0f} г")
         else:
-            lines.append(f"{emoji} {item.name} — ~{item.estimated_grams:.0f} г")
-    elif item.grams_min is not None and item.grams_max is not None:
-        lines.append(f"{emoji} {item.name} — {item.grams_min:.0f}–{item.grams_max:.0f} г")
-    else:
-        lines.append(f"{emoji} {item.name}")
+            lines.append(f"{emoji} {title} — ~{item.estimated_grams:.0f} г")
+    elif not used_quantity_line and item.grams_min is not None and item.grams_max is not None:
+        lines.append(f"{emoji} {title} — {item.grams_min:.0f}–{item.grams_max:.0f} г")
+    elif not used_quantity_line:
+        lines.append(f"{emoji} {title}")
         lines.append("Порция неясна")
         lines.append("👉 Напишите вес, например: «50 г»")
         return lines

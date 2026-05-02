@@ -189,6 +189,10 @@ class MealRepository:
                     needs_portion_clarification=item.needs_portion_clarification,
                     is_estimated=item.is_estimated,
                     confidence=item.confidence,
+                    quantity=item.quantity,
+                    unit_type=item.unit_type,
+                    unit_weight_grams=item.unit_weight_grams,
+                    size_modifier=item.size_modifier,
                 )
             )
         await self._session.flush()

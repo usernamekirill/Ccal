@@ -80,6 +80,7 @@ class FoodItemRecognition(BaseModel):
     portion_confidence: float = Field(default=0.5, ge=0, le=1)
     grams_source: Literal[
         "user",
+        "user_quantity",
         "voice_correction",
         "text_correction",
         "ai_photo",
@@ -89,6 +90,10 @@ class FoodItemRecognition(BaseModel):
     needs_portion_clarification: bool = False
     is_estimated: bool = True
     confidence: float = Field(default=0.7, ge=0, le=1)
+    quantity: float | None = Field(default=None, ge=0)
+    unit_type: str | None = None
+    unit_weight_grams: float | None = Field(default=None, ge=0)
+    size_modifier: str | None = None
 
     @model_validator(mode="before")
     @classmethod

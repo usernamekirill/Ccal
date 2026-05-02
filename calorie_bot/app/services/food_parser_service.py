@@ -7,6 +7,12 @@ from typing import TYPE_CHECKING
 
 from calorie_bot.app.ai.schemas import FoodItemRecognition, FoodRecognitionResult
 from calorie_bot.app.domain import GramsSource
+from calorie_bot.app.services import quantity_resolver
+from calorie_bot.app.services.quantity_phrase_parser import (
+    ParsedQuantityPhrase,
+    canonical_food_key,
+    parse_quantity_phrase,
+)
 
 if TYPE_CHECKING:
     from calorie_bot.app.services.calorie_service import CalorieService
@@ -120,6 +126,69 @@ def apply_portion_qualifier_text(
     return calorie_service.update_grams(result, 1, new_g, grams_source=GramsSource.USER.value)
 
 
+def resolve_quantity_target_index(
+    parsed: ParsedQuantityPhrase,
+    items: list[FoodItemRecognition],
+) -> int | None:
+    """Pick the item line that the quantity phrase refers to."""
+    if not items:
+        return None
+    if len(items) == 1:
+        return 0
+    if not parsed.food_key:
+        return None
+    best_i: int | None = None
+    best = 0
+    key = parsed.food_key
+    for i, it in enumerate(items):
+        if key in it.name.lower():
+            score = len(key)
+            if score > best:
+                best = score
+                best_i = i
+    return best_i
+
+
+def apply_user_quantity_from_text(
+    user_text: str | None,
+    result: FoodRecognitionResult,
+    calorie_service: CalorieService,
+) -> tuple[FoodRecognitionResult, bool]:
+    """Expand «2 яблока»-style input using reference unit weights (after explicit grams are ruled out)."""
+    if not user_text or not user_text.strip() or not result.items:
+        return result, False
+    if extract_ordered_gram_values(user_text):
+        return result, False
+    parsed = parse_quantity_phrase(user_text)
+    if parsed is None:
+        return result, False
+    idx = resolve_quantity_target_index(parsed, result.items)
+    if idx is None:
+        return result, False
+    food_key = parsed.food_key or canonical_food_key(result.items[idx].name)
+    if food_key is None:
+        return result, False
+    try:
+        total_g, uw = quantity_resolver.resolve_total_grams(
+            quantity=parsed.quantity,
+            unit_type=parsed.unit_type,
+            food_key=food_key,
+            size_modifier=parsed.size_modifier,
+        )
+    except ValueError:
+        return result, False
+    out = calorie_service.apply_quantity_to_item(
+        result,
+        idx + 1,
+        quantity=parsed.quantity,
+        unit_type=parsed.unit_type,
+        unit_weight_grams=uw,
+        total_grams=total_g,
+        size_modifier=parsed.size_modifier,
+    )
+    return out, True
+
+
 def apply_user_gram_priority(
     user_text: str | None,
     result: FoodRecognitionResult,
@@ -131,8 +200,16 @@ def apply_user_gram_priority(
     if not user_text or not user_text.strip():
         return result
 
+    has_grams = bool(extract_ordered_gram_values(user_text))
+    out = result
+    qty_applied = False
+    if not has_grams:
+        out, qty_applied = apply_user_quantity_from_text(user_text, out, calorie_service)
+
+    if not has_grams and not qty_applied:
+        out = apply_portion_qualifier_text(user_text, out, calorie_service)
+
     src = grams_source or GramsSource.USER.value
-    out = apply_portion_qualifier_text(user_text, result, calorie_service)
 
     matches = _gram_matches_with_positions(user_text)
     if not matches:

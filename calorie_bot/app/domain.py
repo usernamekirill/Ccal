@@ -60,10 +60,32 @@ class GramsSource(StrEnum):
     """Origin of the portion mass used for KBJU calculation (priority: user/corrections > AI)."""
 
     USER = "user"
+    USER_QUANTITY = "user_quantity"
     VOICE_CORRECTION = "voice_correction"
     TEXT_CORRECTION = "text_correction"
     AI_PHOTO = "ai_photo"
     DEFAULT_PORTION = "default_portion"
+    UNKNOWN = "unknown"
+
+
+class PortionUnitType(StrEnum):
+    """How the user counted the portion before converting to grams."""
+
+    GRAM = "gram"
+    PIECE = "piece"
+    SLICE = "slice"
+    PORTION = "portion"
+    ML = "ml"
+    UNKNOWN = "unknown"
+
+
+class PortionSizeModifier(StrEnum):
+    """Optional size hint for per-unit reference weights."""
+
+    SMALL = "small"
+    MEDIUM = "medium"
+    LARGE = "large"
+    HALF = "half"
     UNKNOWN = "unknown"
 
 
@@ -173,6 +195,10 @@ class MealItemDraft:
     needs_portion_clarification: bool = False
     is_estimated: bool = True
     confidence: float | None = None
+    quantity: float | None = None
+    unit_type: str | None = None
+    unit_weight_grams: float | None = None
+    size_modifier: str | None = None
 
 
 @dataclass(frozen=True)

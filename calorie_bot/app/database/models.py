@@ -160,6 +160,10 @@ class MealItem(TimestampMixin, Base):
     needs_portion_clarification: Mapped[bool] = mapped_column(default=False)
     is_estimated: Mapped[bool] = mapped_column(default=False)
     confidence: Mapped[float | None] = mapped_column(Float)
+    quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    unit_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    unit_weight_grams: Mapped[float | None] = mapped_column(Float, nullable=True)
+    size_modifier: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     meal: Mapped["Meal"] = relationship(back_populates="items")
 

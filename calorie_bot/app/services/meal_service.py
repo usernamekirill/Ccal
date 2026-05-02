@@ -137,6 +137,10 @@ def meal_model_to_draft(meal: Meal) -> MealDraft:
             needs_portion_clarification=item.needs_portion_clarification,
             is_estimated=item.is_estimated,
             confidence=item.confidence,
+            quantity=item.quantity,
+            unit_type=item.unit_type,
+            unit_weight_grams=item.unit_weight_grams,
+            size_modifier=item.size_modifier,
         )
         for item in meal.items
     ]
