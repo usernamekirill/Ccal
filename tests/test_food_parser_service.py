@@ -13,15 +13,19 @@ def _item(
     grams: float,
     calories: int,
 ) -> FoodItemRecognition:
+    per = round(calories * 100.0 / grams, 2) if grams else 200.0
     return FoodItemRecognition(
         name=name,
         portion_description=f"{grams:.0f} г",
         estimated_grams=grams,
         calories=calories,
+        calories_per_100g=per,
         protein=10.0,
         fat=10.0,
         carbs=40.0,
         confidence=0.9,
+        food_confidence=0.9,
+        portion_confidence=0.9,
     )
 
 

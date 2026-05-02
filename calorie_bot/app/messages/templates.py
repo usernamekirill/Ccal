@@ -14,5 +14,11 @@ def meal_item_lines(meal: MealDraft) -> list[str]:
             macros.append(f"У {item.carbs_g:.0f} г")
         macro_text = f" ({', '.join(macros)})" if macros else ""
         portion = f", {item.portion_text}" if item.portion_text else ""
-        lines.append(f"- {item.name}{portion}: {item.calories} ккал{macro_text}")
+        if item.calories_min is not None and item.calories_max is not None:
+            kcal = f"~{item.calories_min}–{item.calories_max} ккал"
+        elif item.calories is not None:
+            kcal = f"{item.calories} ккал"
+        else:
+            kcal = "ккал — уточните порцию"
+        lines.append(f"- {item.name}{portion}: {kcal}{macro_text}")
     return lines

@@ -56,6 +56,17 @@ class MealType(StrEnum):
     SNACK = "snack"
 
 
+class GramsSource(StrEnum):
+    """Origin of the portion mass used for KBJU calculation (priority: user/corrections > AI)."""
+
+    USER = "user"
+    VOICE_CORRECTION = "voice_correction"
+    TEXT_CORRECTION = "text_correction"
+    AI_PHOTO = "ai_photo"
+    DEFAULT_PORTION = "default_portion"
+    UNKNOWN = "unknown"
+
+
 class AIRequestType(StrEnum):
     """External AI request types tracked for usage and cost control."""
 
@@ -136,12 +147,31 @@ class MealItemDraft:
     """Food item draft produced by AI or user correction."""
 
     name: str
-    calories: int
+    calories: int | None = None
     portion_text: str | None = None
     grams: float | None = None
+    grams_min: float | None = None
+    grams_max: float | None = None
+    grams_source: GramsSource | None = None
+    calories_min: int | None = None
+    calories_max: int | None = None
+    calories_per_100g: float | None = None
+    protein_per_100g: float | None = None
+    fat_per_100g: float | None = None
+    carbs_per_100g: float | None = None
     protein_g: float | None = None
     fat_g: float | None = None
     carbs_g: float | None = None
+    protein_g_min: float | None = None
+    protein_g_max: float | None = None
+    fat_g_min: float | None = None
+    fat_g_max: float | None = None
+    carbs_g_min: float | None = None
+    carbs_g_max: float | None = None
+    food_confidence: float | None = None
+    portion_confidence: float | None = None
+    needs_portion_clarification: bool = False
+    is_estimated: bool = True
     confidence: float | None = None
 
 
@@ -155,6 +185,9 @@ class MealDraft:
     meal_type: MealType | None = None
     confidence: float | None = None
     notes: str | None = None
+    total_calories_min: int | None = None
+    total_calories_max: int | None = None
+    has_estimated_items: bool = False
 
 
 @dataclass(frozen=True)
@@ -167,6 +200,7 @@ class StatsTodayView:
     progress_percent: float | None
     meals_count: int
     food_sections: list[str]
+    has_approximate_values: bool = False
 
 
 @dataclass(frozen=True)

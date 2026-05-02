@@ -6,7 +6,7 @@ from calorie_bot.app.keyboards.callback_data import NavCallback
 
 
 def primary_menu_keyboard() -> InlineKeyboardMarkup:
-    """Return the main hub: today, trend, goal, settings, help, and how-to-add hint."""
+    """Главное меню: сегодня, тренд, цель, настройки, помощь — без лишних режимов."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -17,12 +17,6 @@ def primary_menu_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="🎯 Цель", callback_data="settings:goal"),
                 InlineKeyboardButton(text="⚙️ Настройки", callback_data="settings:main"),
             ],
-            [
-                InlineKeyboardButton(text="❓ Помощь", callback_data=NavCallback.HELP),
-                InlineKeyboardButton(
-                    text="➕ Как добавить еду",
-                    callback_data=NavCallback.HOW_TO_ADD_FOOD,
-                ),
-            ],
+            [InlineKeyboardButton(text="❓ Помощь", callback_data=NavCallback.HELP)],
         ]
     )

@@ -36,4 +36,4 @@ def test_format_meal_review_contains_grams_and_total() -> None:
 def test_format_saved_brief_single_item() -> None:
     text = ux_formatter.format_saved_brief(_result())
     assert "кулич" in text.lower()
-    assert "Итого: 150" in text
+    assert "Итого: ≈ 150" in text

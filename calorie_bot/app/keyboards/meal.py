@@ -15,7 +15,7 @@ def meal_confirmation_keyboard() -> InlineKeyboardMarkup:
 
 
 def photo_review_keyboard() -> InlineKeyboardMarkup:
-    """After recognition — save / edit / cancel; quick add/remove; no input-mode rows."""
+    """После распознавания — минимум кнопок (сохранить / изменить / добавить / удалить / отмена)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -24,14 +24,8 @@ def photo_review_keyboard() -> InlineKeyboardMarkup:
             ],
             [InlineKeyboardButton(text="✏️ Изменить", callback_data="photo_meal:edit:flex")],
             [
-                InlineKeyboardButton(
-                    text="➕ Добавить продукт",
-                    callback_data="photo_meal:quick:add",
-                ),
-                InlineKeyboardButton(
-                    text="🗑 Удалить продукт",
-                    callback_data="photo_meal:quick:delete",
-                ),
+                InlineKeyboardButton(text="➕ Добавить", callback_data="photo_meal:quick:add"),
+                InlineKeyboardButton(text="🗑 Удалить", callback_data="photo_meal:quick:delete"),
             ],
         ]
     )

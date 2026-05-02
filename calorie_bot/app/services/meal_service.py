@@ -1,7 +1,14 @@
 from datetime import datetime
 
 from calorie_bot.app.database.models import Meal
-from calorie_bot.app.domain import MealDraft, MealItemDraft, MealSource, MealType
+from calorie_bot.app.domain import (
+    GramsSource,
+    MealDraft,
+    MealItemDraft,
+    MealSource,
+    MealStatus,
+    MealType,
+)
 from calorie_bot.app.repositories.meal_change_log_repository import MealChangeLogRepository
 from calorie_bot.app.repositories.meal_repository import MealRepository
 
@@ -30,18 +37,20 @@ class MealService:
         return await self._meal_repository.replace_draft(meal, draft)
 
     async def confirm_latest_draft(self, user_id: int) -> Meal | None:
-        """Confirm the latest draft meal for a user."""
-        meal = await self._meal_repository.get_latest_draft(user_id)
-        if meal is None:
-            return None
-        return await self._meal_repository.confirm(meal)
+        """Confirm the latest draft meal for a user (atomic; safe under double-submit)."""
+        return await self._meal_repository.transition_latest_draft_status(
+            user_id,
+            from_status=MealStatus.DRAFT.value,
+            to_status=MealStatus.CONFIRMED.value,
+        )
 
     async def cancel_latest_draft(self, user_id: int) -> Meal | None:
-        """Cancel the latest draft meal for a user."""
-        meal = await self._meal_repository.get_latest_draft(user_id)
-        if meal is None:
-            return None
-        return await self._meal_repository.cancel(meal)
+        """Cancel the latest draft meal for a user (atomic; safe under double-submit)."""
+        return await self._meal_repository.transition_latest_draft_status(
+            user_id,
+            from_status=MealStatus.DRAFT.value,
+            to_status=MealStatus.CANCELLED.value,
+        )
 
     async def update_saved_meal(
         self,
@@ -88,6 +97,15 @@ class MealService:
         return deleted
 
 
+def _grams_source_from_db(raw: str | None):
+    if not raw:
+        return None
+    try:
+        return GramsSource(raw)
+    except ValueError:
+        return None
+
+
 def meal_model_to_draft(meal: Meal) -> MealDraft:
     """Convert a database meal model to an in-memory draft."""
     items = [
@@ -95,17 +113,43 @@ def meal_model_to_draft(meal: Meal) -> MealDraft:
             name=item.name,
             portion_text=item.portion_text,
             grams=item.grams,
+            grams_min=item.grams_min,
+            grams_max=item.grams_max,
+            grams_source=_grams_source_from_db(item.grams_source),
             calories=item.calories,
+            calories_min=item.calories_min,
+            calories_max=item.calories_max,
+            calories_per_100g=item.calories_per_100g,
+            protein_per_100g=item.protein_per_100g,
+            fat_per_100g=item.fat_per_100g,
+            carbs_per_100g=item.carbs_per_100g,
             protein_g=item.protein_g,
             fat_g=item.fat_g,
             carbs_g=item.carbs_g,
+            protein_g_min=item.protein_g_min,
+            protein_g_max=item.protein_g_max,
+            fat_g_min=item.fat_g_min,
+            fat_g_max=item.fat_g_max,
+            carbs_g_min=item.carbs_g_min,
+            carbs_g_max=item.carbs_g_max,
+            food_confidence=item.food_confidence,
+            portion_confidence=item.portion_confidence,
+            needs_portion_clarification=item.needs_portion_clarification,
+            is_estimated=item.is_estimated,
             confidence=item.confidence,
         )
         for item in meal.items
     ]
+
+    from calorie_bot.app.services.calorie_service import meal_draft_calorie_totals
+
+    total_calories, t_min, t_max = meal_draft_calorie_totals(items)
     return MealDraft(
         items=items,
-        total_calories=sum(item.calories for item in items),
+        total_calories=total_calories,
+        total_calories_min=t_min,
+        total_calories_max=t_max,
+        has_estimated_items=meal.has_estimated_items,
         source=MealSource(meal.source),
         meal_type=MealType(meal.meal_type) if meal.meal_type else None,
         confidence=meal.ai_confidence,

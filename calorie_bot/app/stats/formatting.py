@@ -12,22 +12,25 @@ def format_progress_bar(percent: float, width: int = 12) -> str:
 
 
 def format_today_status_line(view: StatsTodayView) -> str:
-    """Single-line daily progress for footers, menus, and quick status."""
+    """Single-line daily progress for footers, menus, post-save, and quick status."""
+    approx = getattr(view, "has_approximate_values", False)
+    tilde = "~" if approx else ""
+    label = "🔥 Сегодня:"
     if view.calorie_target is not None and view.progress_percent is not None:
         return (
-            f"Сегодня: {view.total_calories} / {view.calorie_target} ккал "
+            f"{label} {tilde}{view.total_calories} / {view.calorie_target} ккал "
             f"({view.progress_percent:.0f}%)"
         )
     if view.calorie_target is not None:
-        return f"Сегодня: {view.total_calories} / {view.calorie_target} ккал"
-    return f"Сегодня: {view.total_calories} ккал (цель не задана)"
+        return f"{label} {tilde}{view.total_calories} / {view.calorie_target} ккал"
+    return f"{label} {tilde}{view.total_calories} ккал (цель не задана)"
 
 
 def format_today_stats(view: StatsTodayView) -> str:
     """Render today's calories, goal, progress, meals, and food list."""
-    lines = [
-        f"Съедено: {view.total_calories} ккал",
-    ]
+    approx = getattr(view, "has_approximate_values", False)
+    eaten_label = f"Съедено: ~{view.total_calories} ккал" if approx else f"Съедено: {view.total_calories} ккал"
+    lines = [eaten_label]
     if view.calorie_target is not None:
         lines.append(f"Цель: {view.calorie_target} ккал")
         if view.remaining_kcal is not None:
@@ -50,6 +53,10 @@ def format_today_stats(view: StatsTodayView) -> str:
     elif view.meals_count == 0:
         lines.append("")
         lines.append("Пока нет записей за сегодня.")
+
+    if getattr(view, "has_approximate_values", False):
+        lines.append("")
+        lines.append("Часть значений примерная (оценка порции).")
 
     return "\n".join(lines)
 

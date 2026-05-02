@@ -4,8 +4,9 @@ from pathlib import Path
 from openai import AsyncOpenAI
 
 from calorie_bot.app.ai.prompts import PHOTO_RECOGNITION_SYSTEM_PROMPT
-from calorie_bot.app.ai.schemas import FoodRecognitionResult
+from calorie_bot.app.ai.schemas import FoodRecognitionResult, VisionPhotoAnalysisResult
 from calorie_bot.app.config import Settings
+from calorie_bot.app.services.calorie_service import CalorieService
 
 
 class AIPhotoService:
@@ -19,7 +20,7 @@ class AIPhotoService:
         )
 
     async def recognize_food(self, image_path: Path) -> FoodRecognitionResult:
-        """Return a validated food recognition result for a local image file."""
+        """Return normalized food recognition (calories derived from per-100g × grams, not from AI)."""
         encoded_image = base64.b64encode(image_path.read_bytes()).decode("ascii")
         try:
             response = await self._client.chat.completions.create(
@@ -44,4 +45,5 @@ class AIPhotoService:
 
             raise translate_openai_exception(exc) from None
         content = response.choices[0].message.content or "{}"
-        return FoodRecognitionResult.model_validate_json(content)
+        raw = VisionPhotoAnalysisResult.model_validate_json(content)
+        return CalorieService().from_vision_photo_analysis(raw)

@@ -59,6 +59,7 @@ class StatsService:
             progress_percent=progress,
             meals_count=len(meals),
             food_sections=sections,
+            has_approximate_values=any(getattr(m, "has_estimated_items", False) for m in meals),
         )
 
     async def week_view(self, user_id: int) -> StatsWeekView:

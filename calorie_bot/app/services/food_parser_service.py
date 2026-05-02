@@ -6,6 +6,7 @@ import re
 from typing import TYPE_CHECKING
 
 from calorie_bot.app.ai.schemas import FoodItemRecognition, FoodRecognitionResult
+from calorie_bot.app.domain import GramsSource
 
 if TYPE_CHECKING:
     from calorie_bot.app.services.calorie_service import CalorieService
@@ -14,6 +15,13 @@ if TYPE_CHECKING:
 _GRAM_PATTERN = re.compile(
     r"(?P<val>\d+(?:[.,]\d+)?)\s*(?:г(?:рамм(?:ов|а|е)?)?|гр)(?:\b|$)",
     re.IGNORECASE | re.UNICODE,
+)
+
+_ORDINAL_PREFIX_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
+    (re.compile(r"\bперв(ое|ый|ая|ом|ой)\b", re.IGNORECASE), 0),
+    (re.compile(r"\bвтор(ое|ой|ая|ом)\b", re.IGNORECASE), 1),
+    (re.compile(r"\bтреть(е|ий|я|им)\b", re.IGNORECASE), 2),
+    (re.compile(r"\bчетв[её]рт(ое|ый|ая|ым)\b", re.IGNORECASE), 3),
 )
 
 
@@ -35,6 +43,14 @@ def _gram_matches_with_positions(text: str) -> list[tuple[int, float]]:
         raw = match.group("val").replace(",", ".")
         matches.append((match.start(), float(raw)))
     return matches
+
+
+def _ordinal_item_index_from_prefix(prefix: str) -> int | None:
+    """Return 0-based item index when Russian ordinal precedes the gram token."""
+    for pattern, idx in _ORDINAL_PREFIX_PATTERNS:
+        if pattern.search(prefix):
+            return idx
+    return None
 
 
 def _best_item_index_for_lone_gram(
@@ -67,50 +83,94 @@ def _best_item_index_for_lone_gram(
     return best_i
 
 
-def apply_user_gram_priority(
+def _base_grams_for_portion_hint(item: FoodItemRecognition) -> float | None:
+    if item.estimated_grams is not None:
+        return float(item.estimated_grams)
+    if item.grams_min is not None and item.grams_max is not None:
+        return (float(item.grams_min) + float(item.grams_max)) / 2.0
+    return None
+
+
+def apply_portion_qualifier_text(
     user_text: str | None,
     result: FoodRecognitionResult,
     calorie_service: CalorieService,
 ) -> FoodRecognitionResult:
-    """Re-scale items when the user gave explicit grams; user mass overrides AI portions.
+    """Scale a single-item draft when the user says small/medium/large/half portion."""
+    if not user_text or not user_text.strip() or len(result.items) != 1:
+        return result
+    if _gram_matches_with_positions(user_text):
+        return result
+    t = user_text.lower()
+    mult: float | None = None
+    if "половин" in t:
+        mult = 0.5
+    elif "маленьк" in t or "маленькая порция" in t:
+        mult = 0.65
+    elif "больш" in t or "большая порция" in t:
+        mult = 1.45
+    elif "средн" in t or "средняя порция" in t:
+        mult = 1.0
+    if mult is None:
+        return result
+    base = _base_grams_for_portion_hint(result.items[0])
+    if base is None or base <= 0:
+        return result
+    new_g = max(1.0, round(base * mult, 1))
+    return calorie_service.update_grams(result, 1, new_g, grams_source=GramsSource.USER.value)
 
-    Priority: explicit ``X г`` in the user's message wins over model ``estimated_grams``.
-    Does not convert back to "pieces"; only linear rescale from the previous estimate.
-    """
+
+def apply_user_gram_priority(
+    user_text: str | None,
+    result: FoodRecognitionResult,
+    calorie_service: CalorieService,
+    *,
+    grams_source: str | None = None,
+) -> FoodRecognitionResult:
+    """Re-scale items when the user gave explicit grams; user mass overrides AI portions."""
     if not user_text or not user_text.strip():
         return result
 
+    src = grams_source or GramsSource.USER.value
+    out = apply_portion_qualifier_text(user_text, result, calorie_service)
+
     matches = _gram_matches_with_positions(user_text)
     if not matches:
-        return result
+        return out
 
     values = [g for _, g in matches]
     positions = [p for p, _ in matches]
-    n_items = len(result.items)
+    n_items = len(out.items)
     n_grams = len(values)
     if n_items == 0:
-        return result
-
-    out = result.model_copy(deep=True)
+        return out
 
     if n_items == 1:
         target = values[-1]
-        if abs(out.items[0].estimated_grams - target) > 1e-6:
-            out = calorie_service.update_grams(out, 1, target)
+        cur = out.items[0].estimated_grams
+        if cur is None or abs(float(cur) - target) > 1e-6:
+            out = calorie_service.update_grams(out, 1, target, grams_source=src)
         return out
 
     if n_items == n_grams:
         for idx, grams in enumerate(values):
-            if abs(out.items[idx].estimated_grams - grams) > 1e-6:
-                out = calorie_service.update_grams(out, idx + 1, grams)
+            cur = out.items[idx].estimated_grams
+            if cur is None or abs(float(cur) - grams) > 1e-6:
+                out = calorie_service.update_grams(out, idx + 1, grams, grams_source=src)
         return out
 
     if n_grams == 1 and n_items > 1:
         g = values[0]
         pos = positions[0]
-        item_idx = _best_item_index_for_lone_gram(user_text, out.items, pos) + 1
-        if abs(out.items[item_idx - 1].estimated_grams - g) > 1e-6:
-            out = calorie_service.update_grams(out, item_idx, g)
+        prefix = user_text[:pos]
+        ord_i = _ordinal_item_index_from_prefix(prefix)
+        if ord_i is not None and 0 <= ord_i < n_items:
+            item_idx = ord_i + 1
+        else:
+            item_idx = _best_item_index_for_lone_gram(user_text, out.items, pos) + 1
+        cur = out.items[item_idx - 1].estimated_grams
+        if cur is None or abs(float(cur) - g) > 1e-6:
+            out = calorie_service.update_grams(out, item_idx, g, grams_source=src)
         return out
 
-    return result
+    return out

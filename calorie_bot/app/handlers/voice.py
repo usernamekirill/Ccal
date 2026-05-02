@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from calorie_bot.app.ai.speech_client import SpeechToTextService
 from calorie_bot.app.ai.text_parser_service import FoodTextParserService
 from calorie_bot.app.config import Settings
-from calorie_bot.app.domain import MealSource
+from calorie_bot.app.domain import GramsSource, MealSource
 from calorie_bot.app.keyboards.confirmation import recognition_trouble_keyboard
 from calorie_bot.app.keyboards.meal import photo_review_keyboard
 from calorie_bot.app.messages.texts import RECOGNITION_UNCERTAIN_TEXT
@@ -76,7 +76,12 @@ async def handle_voice_or_audio(
     ):
         current = calorie_service.result_from_dict(data["photo_food_result"])
         try:
-            updated = await apply_instruction_to_food_result(settings, transcript, current)
+            updated = await apply_instruction_to_food_result(
+                settings,
+                transcript,
+                current,
+                grams_source=GramsSource.VOICE_CORRECTION,
+            )
         except Exception:
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
             return

@@ -6,6 +6,7 @@ from calorie_bot.app.config import Settings
 from calorie_bot.app.database.telegram_safe_commit import commit_db_work_before_telegram
 from calorie_bot.app.keyboards.confirmation import draft_cancelled_keyboard
 from calorie_bot.app.keyboards.nav_footer import navigation_footer_keyboard
+from calorie_bot.app.messages.texts import MEAL_NOT_FOUND_TEXT
 from calorie_bot.app.messages.ux_flow import MEAL_CANCEL_FOLLOWUP
 from calorie_bot.app.post_action_message import send_post_action_message
 from calorie_bot.app.repositories.meal_repository import MealRepository

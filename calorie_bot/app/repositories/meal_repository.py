@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,6 +24,9 @@ class MealRepository:
             meal_type=meal.meal_type.value if meal.meal_type else None,
             eaten_at=eaten_at,
             total_calories=meal.total_calories,
+            total_calories_min=meal.total_calories_min,
+            total_calories_max=meal.total_calories_max,
+            has_estimated_items=meal.has_estimated_items,
             total_protein_g=total_protein,
             total_fat_g=total_fat,
             total_carbs_g=total_carbs,
@@ -59,10 +62,53 @@ class MealRepository:
         )
         return result.scalar_one_or_none()
 
+    async def transition_latest_draft_status(
+        self,
+        user_id: int,
+        *,
+        from_status: str,
+        to_status: str,
+    ) -> Meal | None:
+        """Atomically move the user's newest draft from ``from_status`` to ``to_status``.
+
+        Uses a single ``UPDATE … WHERE id = (SELECT … LIMIT 1) AND status = draft``
+        so concurrent double-clicks only apply once; the losing transaction updates
+        zero rows and returns ``None``.
+        """
+        latest_id_subq = (
+            select(Meal.id)
+            .where(
+                Meal.user_id == user_id,
+                Meal.status == from_status,
+                Meal.deleted_at.is_(None),
+            )
+            .order_by(Meal.created_at.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        stmt = (
+            update(Meal)
+            .where(
+                Meal.id == latest_id_subq,
+                Meal.user_id == user_id,
+                Meal.status == from_status,
+            )
+            .values(status=to_status)
+            .returning(Meal.id)
+        )
+        result = await self._session.execute(stmt)
+        meal_id = result.scalar_one_or_none()
+        if meal_id is None:
+            return None
+        return await self.get_user_meal(user_id, int(meal_id))
+
     async def replace_draft(self, meal: Meal, draft: MealDraft) -> Meal:
         """Replace draft meal totals and items."""
         total_protein, total_fat, total_carbs = _sum_macros(draft.items)
         meal.total_calories = draft.total_calories
+        meal.total_calories_min = draft.total_calories_min
+        meal.total_calories_max = draft.total_calories_max
+        meal.has_estimated_items = draft.has_estimated_items
         meal.total_protein_g = total_protein
         meal.total_fat_g = total_fat
         meal.total_carbs_g = total_carbs
@@ -86,6 +132,9 @@ class MealRepository:
         """Replace a meal's totals and items after a user edit."""
         total_protein, total_fat, total_carbs = _sum_macros(draft.items)
         meal.total_calories = draft.total_calories
+        meal.total_calories_min = draft.total_calories_min
+        meal.total_calories_max = draft.total_calories_max
+        meal.has_estimated_items = draft.has_estimated_items
         meal.total_protein_g = total_protein
         meal.total_fat_g = total_fat
         meal.total_carbs_g = total_carbs
@@ -109,16 +158,36 @@ class MealRepository:
             await self._session.delete(item)
 
         for item in items:
+            gs = item.grams_source.value if item.grams_source else None
             self._session.add(
                 MealItem(
                     meal_id=meal_id,
                     name=item.name,
                     portion_text=item.portion_text,
                     grams=item.grams,
+                    grams_min=item.grams_min,
+                    grams_max=item.grams_max,
+                    grams_source=gs,
                     calories=item.calories,
+                    calories_min=item.calories_min,
+                    calories_max=item.calories_max,
+                    calories_per_100g=item.calories_per_100g,
+                    protein_per_100g=item.protein_per_100g,
+                    fat_per_100g=item.fat_per_100g,
+                    carbs_per_100g=item.carbs_per_100g,
                     protein_g=item.protein_g,
                     fat_g=item.fat_g,
                     carbs_g=item.carbs_g,
+                    protein_g_min=item.protein_g_min,
+                    protein_g_max=item.protein_g_max,
+                    fat_g_min=item.fat_g_min,
+                    fat_g_max=item.fat_g_max,
+                    carbs_g_min=item.carbs_g_min,
+                    carbs_g_max=item.carbs_g_max,
+                    food_confidence=item.food_confidence,
+                    portion_confidence=item.portion_confidence,
+                    needs_portion_clarification=item.needs_portion_clarification,
+                    is_estimated=item.is_estimated,
                     confidence=item.confidence,
                 )
             )

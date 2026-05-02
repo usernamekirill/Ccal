@@ -40,4 +40,7 @@ class FoodTextParserService:
 
             raise translate_openai_exception(exc) from None
         content = response.choices[0].message.content or "{}"
-        return FoodRecognitionResult.model_validate_json(content)
+        from calorie_bot.app.services.calorie_service import CalorieService
+
+        parsed = FoodRecognitionResult.model_validate_json(content)
+        return CalorieService().validate_food_result(parsed)
