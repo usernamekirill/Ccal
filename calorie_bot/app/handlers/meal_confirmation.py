@@ -6,10 +6,7 @@ from calorie_bot.app.config import Settings
 from calorie_bot.app.database.telegram_safe_commit import commit_db_work_before_telegram
 from calorie_bot.app.keyboards.confirmation import draft_cancelled_keyboard
 from calorie_bot.app.keyboards.nav_footer import navigation_footer_keyboard
-from calorie_bot.app.messages.texts import (
-    MEAL_CANCELLED_TEXT,
-    MEAL_NOT_FOUND_TEXT,
-)
+from calorie_bot.app.messages.ux_flow import MEAL_CANCEL_FOLLOWUP
 from calorie_bot.app.post_action_message import send_post_action_message
 from calorie_bot.app.repositories.meal_repository import MealRepository
 from calorie_bot.app.services.calorie_service import CalorieService
@@ -64,15 +61,16 @@ async def cancel_meal(callback: CallbackQuery, session: AsyncSession) -> None:
     if meal is None:
         await callback.answer(MEAL_NOT_FOUND_TEXT, show_alert=True)
         return
-    await callback.message.edit_text(MEAL_CANCELLED_TEXT, reply_markup=draft_cancelled_keyboard())
+    await callback.message.edit_text(MEAL_CANCEL_FOLLOWUP, reply_markup=draft_cancelled_keyboard())
     await callback.answer()
 
 
 @router.callback_query(F.data == "meal:edit")
 async def edit_meal(callback: CallbackQuery) -> None:
-    """Explain how to edit a meal draft."""
+    """Point to native corrections on the current draft."""
     await callback.answer()
     await callback.message.answer(
-        "Напиши исправление текстом или отправь голосовое, например: рис 120 ккал.",
+        "Напишите правку одним сообщением в чат или отправьте голосовое — я обновлю черновик.\n"
+        "Примеры: «кулич 50 г», «убери второй продукт», «добавь кофе 200 г, 10 ккал».",
         reply_markup=draft_cancelled_keyboard(),
     )

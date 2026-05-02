@@ -1,4 +1,6 @@
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
@@ -9,10 +11,12 @@ from calorie_bot.app.ai.speech_client import SpeechToTextService
 from calorie_bot.app.ai.text_parser_service import FoodTextParserService
 from calorie_bot.app.config import Settings
 from calorie_bot.app.domain import MealSource
+from calorie_bot.app.keyboards.confirmation import recognition_trouble_keyboard
 from calorie_bot.app.keyboards.meal import photo_review_keyboard
+from calorie_bot.app.messages.texts import RECOGNITION_UNCERTAIN_TEXT
 from calorie_bot.app.security.input_validation import ensure_audio_duration
 from calorie_bot.app.services.calorie_service import CalorieService
-from calorie_bot.app.services.correction_service import CorrectionService
+from calorie_bot.app.services.edit_interpreter_service import apply_instruction_to_food_result
 from calorie_bot.app.services.goal_service import GoalService
 from calorie_bot.app.services.onboarding_gate import food_logging_blocked_message
 from calorie_bot.app.services.security_service import SecurityService
@@ -20,6 +24,7 @@ from calorie_bot.app.services.user_service import UserService
 from calorie_bot.app.services.user_settings_service import create_user_settings_service
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
+from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="voice")
 
@@ -32,7 +37,7 @@ async def handle_voice_or_audio(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Handle Telegram voice messages and audio files as meal drafts or corrections."""
+    """Handle voice/audio: refine an open draft or parse a new meal from transcript."""
     if message.from_user is None:
         return
 
@@ -63,23 +68,44 @@ async def handle_voice_or_audio(
 
     data = await state.get_data()
     calorie_service = CalorieService()
-    if data.get("photo_food_result"):
+    st = await state.get_state()
+
+    if data.get("photo_food_result") and st in (
+        MealStates.photo_review.state,
+        MealStates.photo_editing.state,
+    ):
         current = calorie_service.result_from_dict(data["photo_food_result"])
-        updated = CorrectionService().apply_food_result_correction(current, transcript)
+        try:
+            updated = await apply_instruction_to_food_result(settings, transcript, current)
+        except Exception:
+            await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+            return
         await state.set_state(MealStates.photo_review)
         await state.update_data(
             photo_food_result=calorie_service.result_to_dict(updated),
             food_source=MealSource.MIXED.value,
             voice_transcript=transcript,
+            photo_edit_action=None,
         )
         await message.answer(
-            "Распознал голос и обновил текущий результат:\n\n"
-            f"{calorie_service.format_result(updated)}",
+            f"Учёл: «{transcript}»\n\n{calorie_service.format_result(updated)}",
             reply_markup=photo_review_keyboard(),
         )
         return
 
-    result = await FoodTextParserService(settings).parse_food_text(transcript)
+    timezone = ZoneInfo(settings.timezone)
+    default_meal_type = infer_meal_type(datetime.now(timezone))
+    try:
+        result = await FoodTextParserService(settings).parse_food_text(
+            transcript,
+            default_meal_type=default_meal_type.value,
+        )
+    except Exception:
+        await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+        return
+
+    result = calorie_service.with_default_meal_type(result, default_meal_type)
+    result = calorie_service.apply_user_text_gram_priority(transcript, result)
 
     await state.set_state(MealStates.photo_review)
     await state.update_data(

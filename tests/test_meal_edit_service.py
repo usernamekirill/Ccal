@@ -114,7 +114,7 @@ async def test_deletes_saved_meal_and_writes_change_log() -> None:
 
 
 def test_photo_review_keyboard_contains_required_actions() -> None:
-    """Review keyboard should expose required edit and confirmation actions."""
+    """Review keyboard should expose save, cancel, one edit entry, voice, meal type."""
     labels = [
         button.text
         for row in photo_review_keyboard().inline_keyboard
@@ -125,7 +125,4 @@ def test_photo_review_keyboard_contains_required_actions() -> None:
     assert "✏️ Изменить" in labels
     assert "➕ Добавить продукт" in labels
     assert "🗑 Удалить продукт" in labels
-    assert "⚖️ Изменить граммовку" in labels
-    assert "🔥 Изменить калории" in labels
-    assert "🎙 Сказать голосом" in labels
-    assert "❌ Отменить" in labels
+    assert "❌ Отмена" in labels

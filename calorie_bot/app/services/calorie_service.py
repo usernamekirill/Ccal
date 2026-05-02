@@ -5,6 +5,7 @@ from typing import Protocol
 from calorie_bot.app.ai.schemas import FoodItemRecognition, FoodRecognitionResult
 from calorie_bot.app.domain import MealDraft, MealItemDraft, MealSource, MealType
 from calorie_bot.app.repositories.food_cache_repository import FoodCacheRepository
+from calorie_bot.app.utils import ux_formatter
 
 LOW_CONFIDENCE_THRESHOLD = 0.65
 MAX_ITEM_CALORIES = 5000
@@ -95,6 +96,16 @@ class CalorieService:
     def result_from_dict(self, data: dict) -> FoodRecognitionResult:
         """Deserialize a recognition result from FSM storage."""
         return FoodRecognitionResult.model_validate(data)
+
+    def apply_user_text_gram_priority(
+        self,
+        user_text: str | None,
+        result: FoodRecognitionResult,
+    ) -> FoodRecognitionResult:
+        """Honor explicit ``X г`` in user text over model portion grams (linear rescale)."""
+        from calorie_bot.app.services.food_parser_service import apply_user_gram_priority
+
+        return apply_user_gram_priority(user_text, result, self)
 
     async def get_or_estimate_food(
         self,
@@ -193,30 +204,15 @@ class CalorieService:
     def format_saved_meal_brief(self, result: FoodRecognitionResult) -> str:
         """Compact summary after the user saved a meal (no edit-mode hints)."""
         result = self.validate_food_result(result)
-        lines = ["🍽 Что сохранили:"]
-        for index, item in enumerate(result.items, start=1):
-            lines.append(f"{index}. {item.name} — {item.calories} ккал")
-        lines.append(f"Итого приёма: {result.total_calories} ккал")
-        return "\n".join(lines)
+        return ux_formatter.format_saved_brief(result)
 
     def format_result(self, result: FoodRecognitionResult) -> str:
         """Return a user-facing recognition summary."""
         result = self.validate_food_result(result)
-        lines = ["Смотрю на результат. Проверьте, пожалуйста:\n"]
-        for index, item in enumerate(result.items, start=1):
-            macros = self._format_macros(item)
-            lines.append(
-                f"{index}. {item.name} — {item.portion_description}, "
-                f"{item.estimated_grams:.0f} г, {item.calories} ккал{macros}"
-            )
-        lines.append(f"\nИтого: {result.total_calories} ккал")
-        lines.append(f"Комментарий: {result.comment}")
-        lines.append("Расчет примерный — лучше проверить порции перед сохранением.")
-        if self.is_low_confidence(result):
-            lines.append("\nЯ не совсем уверен, проверьте, пожалуйста.")
-        if result.meal_type:
-            lines.append(f"\nТип приема: {_meal_type_label(MealType(result.meal_type))}")
-        return "\n".join(lines)
+        return ux_formatter.format_meal_review(
+            result,
+            show_low_confidence_hint=self.is_low_confidence(result),
+        )
 
     def is_low_confidence(self, result: FoodRecognitionResult) -> bool:
         """Return whether recognition confidence is low."""
@@ -323,16 +319,6 @@ class CalorieService:
             raise ValueError("item_index_out_of_range")
         return result.items[index - 1]
 
-    def _format_macros(self, item: FoodItemRecognition) -> str:
-        values = []
-        if item.protein is not None:
-            values.append(f"Б {item.protein:.0f}")
-        if item.fat is not None:
-            values.append(f"Ж {item.fat:.0f}")
-        if item.carbs is not None:
-            values.append(f"У {item.carbs:.0f}")
-        return f" ({', '.join(values)} г)" if values else ""
-
 
 def _scale_optional(value: float | None, ratio: float) -> float | None:
     return round(value * ratio, 1) if value is not None else None
@@ -357,13 +343,3 @@ def normalize_food_name(name: str) -> str:
     normalized = re.sub(r"\s+", " ", normalized)
     normalized = re.sub(r"[^0-9a-zа-я\s-]", "", normalized)
     return normalized.strip()
-
-
-def _meal_type_label(meal_type: MealType) -> str:
-    labels = {
-        MealType.BREAKFAST: "завтрак",
-        MealType.LUNCH: "обед",
-        MealType.DINNER: "ужин",
-        MealType.SNACK: "перекус",
-    }
-    return labels[meal_type]

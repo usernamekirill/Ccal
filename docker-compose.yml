@@ -28,6 +28,7 @@ services:
     volumes:
       - ./logs:/app/logs
       - ./tmp:/app/tmp
+      - ./backups:/app/backups
 
 volumes:
   postgres_data:

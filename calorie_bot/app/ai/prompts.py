@@ -25,7 +25,12 @@ FOOD_TEXT_PARSER_PROMPT = (
     "items[].name, portion_description, estimated_grams, calories, protein, fat, carbs, "
     "confidence, total_calories, overall_confidence, comment, meal_type, "
     "needs_clarification, clarification_question. meal_type должен быть одним из: "
-    "breakfast, lunch, dinner, snack или null. Если калории не указаны — оцени сам. "
+    "breakfast, lunch, dinner, snack или null. "
+    "КРИТИЧНО: если пользователь явно указал массу в граммах (например «50 г», «100 грамм»), "
+    "поле estimated_grams для соответствующего продукта ДОЛЖНО равняться этому числу, "
+    "а calories и КБЖУ пересчитай пропорционально этой массе от базы на 100 г или от твоей "
+    "оценки целой порции — не подменяй явные граммы пользователя «одной штукой» или средней порцией. "
+    "Если калории в тексте не указаны — оцени сам от выбранной массы. "
     "Если данных мало и нельзя сделать полезную оценку — задай ровно один короткий "
     "уточняющий вопрос в clarification_question и поставь needs_clarification=true. "
     "Не добавляй markdown."
@@ -35,7 +40,9 @@ FOOD_CORRECTION_PROMPT = (
     "Ты сервис корректировки питания. Получишь текущий JSON результата и текст правки. "
     "Верни только обновленный валидный JSON FoodRecognitionResult. "
     "Изменяй граммовку и калории пропорционально, добавляй или удаляй продукты по тексту. "
-    "Если не уверен, снизь confidence и добавь короткий comment."
+    "Если пользователь указал явные граммы (например «кулич 50 г») — выставь estimated_grams "
+    "и пересчитай calories и макросы линейно от прежней оценки, не отбрасывай эти граммы. "
+    "Если не уверен, снизь confidence и кратко опиши сомнение в comment (одно короткое предложение)."
 )
 
 NUTRITION_ESTIMATE_PROMPT = (

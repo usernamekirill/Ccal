@@ -2,49 +2,37 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 def meal_confirmation_keyboard() -> InlineKeyboardMarkup:
-    """Return meal draft confirmation keyboard."""
+    """Return meal draft confirmation keyboard (legacy path; aligns with photo review)."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="✅ Сохранить", callback_data="meal:confirm"),
                 InlineKeyboardButton(text="❌ Отменить", callback_data="meal:cancel"),
             ],
-            [InlineKeyboardButton(text="🎙 Сказать голосом", callback_data="meal:voice")],
+            [InlineKeyboardButton(text="✏️ Изменить", callback_data="meal:edit")],
         ]
     )
 
 
 def photo_review_keyboard() -> InlineKeyboardMarkup:
-    """Return photo recognition review keyboard."""
+    """After recognition — save / edit / cancel; quick add/remove; no input-mode rows."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="✅ Сохранить", callback_data="photo_meal:confirm"),
-                InlineKeyboardButton(text="❌ Отменить", callback_data="photo_meal:cancel"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="photo_meal:cancel"),
             ],
-            [InlineKeyboardButton(text="✏️ Изменить", callback_data="photo_meal:edit:name")],
-            [
-                InlineKeyboardButton(
-                    text="⚖️ Изменить граммовку",
-                    callback_data="photo_meal:edit:grams",
-                ),
-                InlineKeyboardButton(
-                    text="🔥 Изменить калории",
-                    callback_data="photo_meal:edit:calories",
-                ),
-            ],
+            [InlineKeyboardButton(text="✏️ Изменить", callback_data="photo_meal:edit:flex")],
             [
                 InlineKeyboardButton(
                     text="➕ Добавить продукт",
-                    callback_data="photo_meal:edit:add",
+                    callback_data="photo_meal:quick:add",
                 ),
                 InlineKeyboardButton(
                     text="🗑 Удалить продукт",
-                    callback_data="photo_meal:edit:delete",
+                    callback_data="photo_meal:quick:delete",
                 ),
             ],
-            [InlineKeyboardButton(text="🎙 Сказать голосом", callback_data="meal:voice")],
-            [InlineKeyboardButton(text="Изменить тип приема", callback_data="food:meal_type")],
         ]
     )
 

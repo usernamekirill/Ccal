@@ -13,7 +13,7 @@ from calorie_bot.app.keyboards.onboarding import (
     continue_keyboard,
     goal_keyboard,
 )
-from calorie_bot.app.messages.ux_flow import MAIN_MENU_TITLE
+from calorie_bot.app.messages.ux_flow import MAIN_MENU_TITLE, READY_TO_LOG_BLURB
 from calorie_bot.app.repositories.meal_repository import MealRepository
 from calorie_bot.app.repositories.profile_repository import ProfileRepository
 from calorie_bot.app.repositories.stats_repository import StatsRepository
@@ -22,7 +22,6 @@ from calorie_bot.app.services.stats_service import StatsService
 from calorie_bot.app.states.onboarding import OnboardingStates
 from calorie_bot.app.stats.formatting import format_today_status_line
 from calorie_bot.app.texts.onboarding import (
-    COMPLETED_WELCOME,
     CONTINUE_PROMPT,
     GOAL_PROMPT,
     WELCOME,
@@ -80,7 +79,7 @@ async def handle_start(
         view = await stats.today_view(user.id)
         line = format_today_status_line(view)
         nudge = await _meal_logging_nudge(MealRepository(session), settings, user.id)
-        text = f"{line}\n\n{COMPLETED_WELCOME}{nudge}\n\n{MAIN_MENU_TITLE}"
+        text = f"{READY_TO_LOG_BLURB}\n\n{line}{nudge}\n\n{MAIN_MENU_TITLE}"
         await message.answer(text, reply_markup=primary_menu_keyboard())
         return
     if current_state:

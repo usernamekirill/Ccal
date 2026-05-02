@@ -6,12 +6,9 @@ from calorie_bot.app.keyboards.callback_data import NavCallback
 
 
 def navigation_footer_rows() -> list[list[InlineKeyboardButton]]:
-    """Two-button strip: quick add-food prompt + main hub."""
+    """Single strip: return to main hub (food logging stays native)."""
     return [
-        [
-            InlineKeyboardButton(text="📸 Добавить еду", callback_data=NavCallback.ADD_FOOD),
-            InlineKeyboardButton(text="🏠 Меню", callback_data=NavCallback.MAIN_MENU),
-        ],
+        [InlineKeyboardButton(text="🏠 Меню", callback_data=NavCallback.MAIN_MENU)],
     ]
 
 
