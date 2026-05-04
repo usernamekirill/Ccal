@@ -24,6 +24,12 @@ _GRAM_PATTERN = re.compile(
     re.IGNORECASE | re.UNICODE,
 )
 
+# Whole message is only a mass (FSM «ожидание веса»: ``100``, ``100 г``, ``120.5г``).
+_LOOSE_GRAMS_LINE = re.compile(
+    r"^\s*(\d+(?:[.,]\d+)?)\s*(?:г(?:рамм?\w*)?|гр)?\s*$",
+    re.IGNORECASE | re.UNICODE,
+)
+
 _ORDINAL_PREFIX_PATTERNS: tuple[tuple[re.Pattern[str], int], ...] = (
     (re.compile(r"\bперв(ое|ый|ая|ом|ой)\b", re.IGNORECASE), 0),
     (re.compile(r"\bвтор(ое|ой|ая|ом)\b", re.IGNORECASE), 1),
@@ -41,6 +47,22 @@ def extract_ordered_gram_values(text: str) -> list[float]:
         raw = match.group("val").replace(",", ".")
         out.append(float(raw))
     return out
+
+
+def parse_loose_grams_line(text: str) -> float | None:
+    """If the user message is only a gram value, return it; otherwise ``None``."""
+    if not text or not str(text).strip():
+        return None
+    m = _LOOSE_GRAMS_LINE.match(str(text).strip())
+    if not m:
+        return None
+    try:
+        g = float(m.group(1).replace(",", "."))
+    except ValueError:
+        return None
+    if g <= 0 or g > 99_999:
+        return None
+    return g
 
 
 def _gram_matches_with_positions(text: str) -> list[tuple[int, float]]:

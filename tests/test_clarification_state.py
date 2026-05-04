@@ -48,3 +48,8 @@ def test_fsm_uses_text_draft_when_items_present() -> None:
     data = fsm_data_blocking_text_clarification(svc, r, pending_text="яблоко", default_meal_type="lunch")
     assert data["clarification_mode"] == "text_draft"
     assert data["pending_food_result_draft"] is not None
+    assert data["pending_food"] == {
+        "name": "яблоко",
+        "quantity": 1.0,
+        "unit": "piece",
+    }

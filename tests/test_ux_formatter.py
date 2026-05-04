@@ -1,6 +1,7 @@
 """Smoke tests for compact Telegram meal preview strings."""
 
 from calorie_bot.app.ai.schemas import FoodItemRecognition, FoodRecognitionResult
+from calorie_bot.app.services.calorie_service import CalorieService
 from calorie_bot.app.utils import ux_formatter
 
 
@@ -37,3 +38,55 @@ def test_format_saved_brief_single_item() -> None:
     text = ux_formatter.format_saved_brief(_result())
     assert "кулич" in text.lower()
     assert "Итого: ≈ 150" in text
+
+
+def test_format_meal_review_skips_shallow_macro_total_mismatch_warning() -> None:
+    """Small Atwater vs declared kcal spread should not spam the mismatch banner."""
+    svc = CalorieService()
+    r = FoodRecognitionResult(
+        items=[
+            FoodItemRecognition(
+                name="тест",
+                portion_description="100 г",
+                estimated_grams=100.0,
+                calories=100,
+                protein=4.5,
+                fat=4.5,
+                carbs=9.0,
+                food_confidence=0.9,
+                portion_confidence=0.9,
+                confidence=0.9,
+            )
+        ],
+        total_calories=100,
+        overall_confidence=0.9,
+        comment="x",
+    )
+    r = svc.validate_food_result(r)
+    text = ux_formatter.format_meal_review(r)
+    assert "расходятся" not in text
+
+
+def test_format_meal_review_warns_on_large_macro_total_mismatch() -> None:
+    """Without aligning totals, a clear gap triggers the banner (formatter-only check)."""
+    r = FoodRecognitionResult(
+        items=[
+            FoodItemRecognition(
+                name="тест",
+                portion_description="100 г",
+                estimated_grams=100.0,
+                calories=200,
+                protein=4.5,
+                fat=4.5,
+                carbs=9.0,
+                food_confidence=0.9,
+                portion_confidence=0.9,
+                confidence=0.9,
+            )
+        ],
+        total_calories=200,
+        overall_confidence=0.9,
+        comment="x",
+    )
+    text = ux_formatter.format_meal_review(r)
+    assert "расходятся" in text

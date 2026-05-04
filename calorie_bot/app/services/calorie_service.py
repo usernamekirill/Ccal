@@ -1033,6 +1033,41 @@ class CalorieService:
         q = (result.clarification_question or "").strip()
         return bool(result.needs_clarification and q)
 
+    def is_portion_weight_blocking_only(self, result: FoodRecognitionResult) -> bool:
+        """Single-item draft blocked only because mass/portion is unknown (not e.g. type of cheese)."""
+        if not self.requires_blocking_clarification(result):
+            return False
+        if len(result.items) != 1:
+            return False
+        it = result.items[0]
+        if has_quantified_portion_mass(it.estimated_grams, it.grams_min, it.grams_max):
+            return False
+        return True
+
+    async def apply_user_loose_weight_reply(
+        self,
+        result: FoodRecognitionResult,
+        message_text: str,
+        *,
+        session: AsyncSession,
+        settings: "Settings",
+    ) -> FoodRecognitionResult | None:
+        """Apply a grams-only reply (``100``, ``100 г``) to a single-item draft without calling the LLM."""
+        from calorie_bot.app.services.food_parser_service import parse_loose_grams_line
+
+        grams = parse_loose_grams_line(message_text)
+        if grams is None:
+            return None
+        if len(result.items) != 1:
+            return None
+        it0 = result.items[0]
+        if has_quantified_portion_mass(it0.estimated_grams, it0.grams_min, it0.grams_max):
+            return None
+        hint = f"{it0.name} {grams:g} г"
+        out = self.update_grams(result, 1, float(grams), grams_source=GramsSource.USER.value)
+        out = await self.enrich_after_text_processing(out, hint, session, settings)
+        return self.validate_food_result(out)
+
     def update_name(
         self,
         result: FoodRecognitionResult,

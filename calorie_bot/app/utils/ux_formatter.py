@@ -79,7 +79,8 @@ def format_meal_review(
                 and result.total_calories_max is None
             ):
                 rel = abs(atw_total - result.total_calories) / float(result.total_calories)
-                if rel > 0.08:
+                # Avoid noisy warnings: rounding / fiber-alcohol spread; only flag clear mismatch.
+                if rel > 0.18 and result.total_calories >= 50:
                     lines.append(
                         f"⚠️ Сумма ккал ({result.total_calories}) и ккал из суммарного БЖУ "
                         f"({atw_total}) заметно расходятся (~{rel * 100:.0f}%)."

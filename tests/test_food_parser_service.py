@@ -5,6 +5,7 @@ from calorie_bot.app.services.calorie_service import CalorieService
 from calorie_bot.app.services.food_parser_service import (
     apply_user_gram_priority,
     extract_ordered_gram_values,
+    parse_loose_grams_line,
 )
 
 
@@ -37,6 +38,15 @@ def _result(items: list[FoodItemRecognition]) -> FoodRecognitionResult:
         overall_confidence=min(i.confidence for i in items),
         comment="тест",
     )
+
+
+def test_parse_loose_grams_line_accepts_bare_number_and_suffix() -> None:
+    """FSM weight step: whole message is grams only (no LLM)."""
+    assert parse_loose_grams_line("100") == 100.0
+    assert parse_loose_grams_line("120.5г") == 120.5
+    assert parse_loose_grams_line("  80 г ") == 80.0
+    assert parse_loose_grams_line("яблоко") is None
+    assert parse_loose_grams_line("") is None
 
 
 def test_extract_ordered_gram_values_finds_mass_units() -> None:

@@ -28,6 +28,7 @@ from calorie_bot.app.services.user_service import UserService
 from calorie_bot.app.services.user_settings_service import create_user_settings_service
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
+from calorie_bot.app.handlers.text_food import _WEIGHT_REPLY_HINT, _try_finish_after_loose_weight_reply
 from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
 from calorie_bot.app.utils.meal_type import infer_meal_type
 
@@ -75,6 +76,21 @@ async def handle_voice_or_audio(
     data = await state.get_data()
     calorie_service = CalorieService()
     st = await state.get_state()
+
+    if st == MealStates.waiting_for_weight.state and data.get("pending_food_result_draft"):
+        handled = await _try_finish_after_loose_weight_reply(
+            message,
+            state,
+            session,
+            settings,
+            calorie_service,
+            data["pending_food_result_draft"],
+            transcript.strip(),
+            food_source=MealSource.AUDIO.value,
+        )
+        if not handled:
+            await message.answer(_WEIGHT_REPLY_HINT)
+        return
 
     if data.get("photo_food_result") and st in (
         MealStates.photo_review.state,
@@ -143,7 +159,12 @@ async def handle_voice_or_audio(
 
     result = calorie_service.apply_clarification_guards(result)
     if calorie_service.requires_blocking_clarification(result):
-        await state.set_state(MealStates.waiting_for_correction)
+        next_state = (
+            MealStates.waiting_for_weight
+            if calorie_service.is_portion_weight_blocking_only(result)
+            else MealStates.waiting_for_correction
+        )
+        await state.set_state(next_state)
         await state.update_data(
             **fsm_data_blocking_text_clarification(
                 calorie_service,
@@ -164,6 +185,7 @@ async def handle_voice_or_audio(
                 default_meal_type=default_meal_type.value,
                 clarification_mode=None,
                 pending_food_result_draft=None,
+                pending_food=None,
             )
             await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX} {result.clarification_question}")
         else:
@@ -178,6 +200,7 @@ async def handle_voice_or_audio(
         clarification_mode=None,
         pending_food_result_draft=None,
         pending_text_food=None,
+        pending_food=None,
     )
     body = calorie_service.format_result(result)
     if result.needs_clarification and result.clarification_question:
