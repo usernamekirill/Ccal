@@ -31,6 +31,64 @@ CORRECTION_PROMPT = (
     "matching the meal analysis schema."
 )
 
+TEXT_FOOD_STRUCTURED_PROMPT = (
+    "Ты профессиональный нутрициолог и NLP-парсер еды для Telegram-бота дневника питания.\n"
+    "Разбери сообщение пользователя и верни строго один JSON-объект (без markdown, без пояснений).\n\n"
+    "Правила:\n"
+    "1. Русский язык: словоформы, падежи, сокращения, опечатки.\n"
+    "2. Масса в граммах: «200г», «200 г», «200 грамм», «200 граммов», «100 гр».\n"
+    "3. Порядок слов: «гречка 200 г», «200 г гречки», «кусок шарлотки 100 г», «170 грамм шарлотки».\n"
+    "4. Порции: «кусок пирога», «тарелка супа», «ложка сметаны»; счётные «1 яблоко», «три яйца» — "
+    "quantity и unit «piece», weight_grams суммарная масса если указана или оценочная.\n"
+    "5. НЕ объединяй разные продукты в один item: «кофе с молоком и сахаром» → 3 items; "
+    "«блины со сметаной» → 2 items (блины + сметана).\n"
+    "6. Нет веса — оцени типичную порцию, поставь needs_clarification=true и короткий clarification_question, "
+    "is_estimated=true для оценочных строк.\n"
+    "7. Слишком общее («салат», «пирог», «еда») без деталей — needs_clarification=true, попроси уточнить вид и вес.\n"
+    "8. Если пользователь указал вес в тексте — weight_grams заполнен, НЕ проси вес повторно "
+    "(needs_clarification из-за веса не ставь).\n"
+    "9. «кусок пирога шарлотка 100 грамм» → name «шарлотка», portion_description «кусок», weight_grams 100, "
+    "needs_clarification false если КБЖУ уверенны.\n"
+    "10. Каждая строка items: name, canonical_name (краткое имя продукта), quantity, unit (\"g\"|\"piece\"|\"ml\"), "
+    "weight_grams (число или null), portion_description, calories_per_100g, protein_per_100g, fat_per_100g, "
+    "carbs_per_100g, calories/protein/fat/carbs для выбранной массы, confidence 0..1, is_estimated bool.\n"
+    "11. recognized=true если разбор осмысленный; иначе recognized=false и короткий clarification_question.\n"
+    "12. totals.calories|protein|fat|carbs — суммы по items; пересчитай согласованно.\n"
+    "13. meal_type: breakfast|lunch|dinner|snack или unknown.\n"
+    "14. user_message_normalized — нормализованная одна строка без лишних слов.\n"
+    "15. reasoning_summary — одно короткое предложение по-русски.\n\n"
+    "Схема JSON:\n"
+    "{\n"
+    '  "recognized": true,\n'
+    '  "needs_clarification": false,\n'
+    '  "clarification_question": null,\n'
+    '  "meal_type": "unknown",\n'
+    '  "items": [\n'
+    "    {\n"
+    '      "name": "шарлотка",\n'
+    '      "canonical_name": "шарлотка",\n'
+    '      "quantity": 1,\n'
+    '      "unit": "g",\n'
+    '      "weight_grams": 100,\n'
+    '      "portion_description": "кусок",\n'
+    '      "calories_per_100g": 190,\n'
+    '      "protein_per_100g": 3,\n'
+    '      "fat_per_100g": 6,\n'
+    '      "carbs_per_100g": 32,\n'
+    '      "calories": 190,\n'
+    '      "protein": 3,\n'
+    '      "fat": 6,\n'
+    '      "carbs": 32,\n'
+    '      "confidence": 0.85,\n'
+    '      "is_estimated": false\n'
+    "    }\n"
+    "  ],\n"
+    '  "totals": { "calories": 190, "protein": 3, "fat": 6, "carbs": 32 },\n'
+    '  "user_message_normalized": "шарлотка 100 г",\n'
+    '  "reasoning_summary": "..."\n'
+    "}\n"
+)
+
 FOOD_TEXT_PARSER_PROMPT = (
     "Ты NLP-сервис для дневника питания. Извлеки из русского текста ВСЕ продукты и блюда как отдельные "
     "элементы items[]. Пользователь может перечислять несколько блюд через запятую и/или союз «и» "
