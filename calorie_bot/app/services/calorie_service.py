@@ -1,3 +1,4 @@
+import logging
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
@@ -29,6 +30,8 @@ from calorie_bot.app.utils import ux_formatter
 
 if TYPE_CHECKING:
     from calorie_bot.app.config import Settings
+
+_log = logging.getLogger(__name__)
 
 LOW_CONFIDENCE_THRESHOLD = 0.65
 MAX_ITEM_CALORIES = 5000
@@ -692,7 +695,22 @@ class CalorieService:
         normalized_name = normalize_food_name(food_name)
         cached = await cache_repository.get_by_normalized_name(normalized_name)
         if cached is None:
-            estimate = await estimator.estimate_food(food_name)
+            try:
+                estimate = await estimator.estimate_food(food_name)
+            except Exception:
+                _log.warning(
+                    "nutrition_estimate_api_fallback",
+                    extra={"food_name": food_name},
+                )
+                estimate = NutritionEstimate(
+                    display_name=normalized_name,
+                    calories_per_100g=200.0,
+                    protein_per_100g=6.0,
+                    fat_per_100g=5.0,
+                    carbs_per_100g=30.0,
+                    confidence=0.35,
+                    is_estimated=True,
+                )
             self.validate_calories(estimate.calories_per_100g)
             cached = await cache_repository.upsert(
                 normalized_name=normalized_name,

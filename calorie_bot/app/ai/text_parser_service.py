@@ -26,6 +26,10 @@ class FoodTextParserService:
             if default_meal_type
             else ""
         )
+        from calorie_bot.app.services.calorie_service import CalorieService
+        from calorie_bot.app.services.food_parser_service import try_simple_gram_meal_text
+        from calorie_bot.app.utils.openai_errors import translate_openai_exception
+
         try:
             response = await self._client.chat.completions.create(
                 model=self._settings.openai_correction_model,
@@ -35,12 +39,11 @@ class FoodTextParserService:
                     {"role": "user", "content": text + default_hint},
                 ],
             )
+            content = response.choices[0].message.content or "{}"
+            parsed = FoodRecognitionResult.model_validate_json(content)
+            return CalorieService().validate_food_result(parsed)
         except Exception as exc:
-            from calorie_bot.app.utils.openai_errors import translate_openai_exception
-
+            fb = try_simple_gram_meal_text(text)
+            if fb is not None:
+                return CalorieService().validate_food_result(fb)
             raise translate_openai_exception(exc) from None
-        content = response.choices[0].message.content or "{}"
-        from calorie_bot.app.services.calorie_service import CalorieService
-
-        parsed = FoodRecognitionResult.model_validate_json(content)
-        return CalorieService().validate_food_result(parsed)

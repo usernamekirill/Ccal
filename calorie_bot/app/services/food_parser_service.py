@@ -17,9 +17,9 @@ from calorie_bot.app.services.quantity_phrase_parser import (
 if TYPE_CHECKING:
     from calorie_bot.app.services.calorie_service import CalorieService
 
-# Explicit mass grams in user text (not ккал). Supports "50 г", "50г", "50 грамм".
+# Explicit mass grams in user text (not ккал). Supports "50 г", "50г", "150 грам", "50 грамм".
 _GRAM_PATTERN = re.compile(
-    r"(?P<val>\d+(?:[.,]\d+)?)\s*(?:г(?:рамм(?:ов|а|е)?)?|гр)(?:\b|$)",
+    r"(?P<val>\d+(?:[.,]\d+)?)\s*(?:г(?:рамм?(?:ов|а|е)?)?|гр)(?:\b|$)",
     re.IGNORECASE | re.UNICODE,
 )
 
@@ -260,3 +260,57 @@ def apply_user_gram_priority(
         return out
 
     return out
+
+
+def try_simple_gram_meal_text(text: str) -> FoodRecognitionResult | None:
+    """Parse a single explicit-grams Russian line without LLM (fallback when API/JSON fails).
+
+    Handles patterns such as «гречка 200г», «170 грам шарлотки» (after :data:`_GRAM_PATTERN` fix).
+    Returns ``None`` if the message is not exactly one mass + one food name chunk.
+    """
+    from calorie_bot.app.services.calorie_service import normalize_food_name
+
+    t = (text or "").strip()
+    if not t or len(t) > 800:
+        return None
+    matches = list(_GRAM_PATTERN.finditer(t))
+    if len(matches) != 1:
+        return None
+    m = matches[0]
+    raw_val = m.group("val").replace(",", ".")
+    try:
+        grams = float(raw_val)
+    except ValueError:
+        return None
+    if grams <= 0 or grams > 99_999:
+        return None
+    name = (t[: m.start()] + " " + t[m.end() :]).strip()
+    name = re.sub(r"\s+", " ", name).strip(" ,.;—–-")
+    if len(name) < 2:
+        return None
+    name = normalize_food_name(name)
+    if not name or len(name) < 2:
+        return None
+    item = FoodItemRecognition(
+        name=name,
+        portion_description=f"{grams:.0f} г",
+        estimated_grams=grams,
+        calories=None,
+        calories_per_100g=None,
+        protein=None,
+        fat=None,
+        carbs=None,
+        food_confidence=0.55,
+        portion_confidence=0.93,
+        grams_source=GramsSource.USER.value,
+        needs_portion_clarification=False,
+        is_estimated=True,
+        confidence=0.55,
+    )
+    return FoodRecognitionResult(
+        items=[item],
+        total_calories=0,
+        overall_confidence=0.55,
+        comment="Запись по явным граммам из сообщения (резерв без LLM).",
+        needs_clarification=False,
+    )
