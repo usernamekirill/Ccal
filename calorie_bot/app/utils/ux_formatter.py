@@ -2,8 +2,12 @@
 
 from calorie_bot.app.ai.schemas import FoodRecognitionResult
 from calorie_bot.app.domain import MealType
+from calorie_bot.app.services import portion_estimator
 from calorie_bot.app.utils.calories import calories_from_macros
-from calorie_bot.app.utils.nutrition_formatter import format_item_block, meal_has_unknown_portion_items
+from calorie_bot.app.utils.nutrition_formatter import (
+    format_item_block,
+    meal_has_unknown_portion_items,
+)
 
 
 def _meal_type_ru(value: str | None) -> str | None:
@@ -40,8 +44,20 @@ def format_meal_review(
     show_low_confidence_hint: bool = False,
 ) -> str:
     """Confirmation card with honest grams/calories (point, range, or clarify)."""
+    intro = ""
+    if (
+        len(result.items) == 1
+        and meal_has_unknown_portion_items(result.items)
+        and "нашёл" not in (result.clarification_question or "").lower()
+    ):
+        it = result.items[0]
+        rng = portion_estimator.estimate_default_portion_grams(it.name)
+        mid = (rng.grams_min + rng.grams_max) / 2
+        line2 = f"Укажите вес или подтвердите стандартную порцию (~{mid:.0f} г).\n\n"
+        intro = f"Я нашёл: {it.name}. " + line2
+
     blocks = ["\n".join(format_item_block(item)) for item in result.items]
-    body = "\n\n".join(blocks)
+    body = intro + "\n\n".join(blocks)
     lines: list[str] = [body, ""]
 
     unknown_any = meal_has_unknown_portion_items(result.items)
@@ -73,7 +89,7 @@ def format_meal_review(
     if mt:
         lines.append(f"Приём: {mt}")
 
-    if result.needs_portion_clarification:
+    if result.needs_portion_clarification and not (result.clarification_question or "").strip():
         lines.append(
             "\nЯ понял блюдо, но не уверен в размере порции. "
             "Напишите вес, например: 50 г.",
@@ -82,7 +98,11 @@ def format_meal_review(
     if show_low_confidence_hint:
         lines.append("\n⚠️ Оценка примерная — проверь порцию и размер.")
 
-    return "\n".join(lines)
+    out_text = "\n".join(lines)
+    cq = (result.clarification_question or "").strip()
+    if cq and cq.lower() not in out_text.lower():
+        out_text = f"{out_text}\n\n{cq}"
+    return out_text
 
 
 def format_saved_brief(result: FoodRecognitionResult) -> str:

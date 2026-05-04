@@ -6,8 +6,9 @@ import re
 from typing import TYPE_CHECKING
 
 from calorie_bot.app.ai.schemas import FoodItemRecognition, FoodRecognitionResult
-from calorie_bot.app.domain import GramsSource
+from calorie_bot.app.domain import GramsSource, PortionUnitType
 from calorie_bot.app.services import quantity_resolver
+from calorie_bot.app.services.nutrition_calculator import has_quantified_portion_mass
 from calorie_bot.app.services.quantity_phrase_parser import (
     ParsedQuantityPhrase,
     canonical_food_key,
@@ -129,6 +130,50 @@ def apply_portion_qualifier_text(
     return calorie_service.update_grams(result, 1, new_g, grams_source=GramsSource.USER.value)
 
 
+def try_implicit_one_piece_bare_food_name(
+    user_text: str,
+    result: FoodRecognitionResult,
+    calorie_service: CalorieService,
+) -> FoodRecognitionResult | None:
+    """Apply 1× reference unit mass when the message is exactly one known countable food name.
+
+    Used for inputs like «яблоко» (no explicit count) so the flow does not stall on zero grams.
+    """
+    from calorie_bot.app.services.calorie_service import normalize_food_name
+    from calorie_bot.app.services.unit_weight_service import list_known_food_keys
+
+    if len(result.items) != 1:
+        return None
+    item = result.items[0]
+    if has_quantified_portion_mass(item.estimated_grams, item.grams_min, item.grams_max):
+        return None
+    t = re.sub(r"\s+", " ", (user_text or "").strip().lower())
+    if not t:
+        return None
+    name_n = normalize_food_name(item.name)
+    if t != name_n.lower():
+        return None
+    key = canonical_food_key(name_n)
+    if key is None or key not in list_known_food_keys():
+        return None
+    total_g, uw = quantity_resolver.resolve_total_grams(
+        quantity=1.0,
+        unit_type=PortionUnitType.PIECE.value,
+        food_key=key,
+        size_modifier=None,
+        per_unit_grams=None,
+    )
+    return calorie_service.apply_quantity_to_item(
+        result,
+        1,
+        quantity=1.0,
+        unit_type=PortionUnitType.PIECE.value,
+        unit_weight_grams=uw,
+        total_grams=total_g,
+        size_modifier=None,
+    )
+
+
 def resolve_quantity_target_index(
     parsed: ParsedQuantityPhrase,
     items: list[FoodItemRecognition],
@@ -220,6 +265,12 @@ def apply_user_gram_priority(
     qty_applied = False
     if try_qty_first:
         out, qty_applied = apply_user_quantity_from_text(user_text, out, calorie_service)
+
+    if not has_grams and not qty_applied:
+        implicit = try_implicit_one_piece_bare_food_name(user_text, out, calorie_service)
+        if implicit is not None:
+            out = implicit
+            qty_applied = True
 
     if not has_grams and not qty_applied:
         out = apply_portion_qualifier_text(user_text, out, calorie_service)

@@ -66,6 +66,52 @@ _GRAMS_SOURCE_RANK: dict[str, int] = {
 }
 
 
+def _build_missing_portion_clarification(items: list[FoodItemRecognition]) -> str:
+    """UX copy when names exist but portion mass is unknown (incomplete input)."""
+    needy = [
+        i
+        for i in items
+        if not has_quantified_portion_mass(i.estimated_grams, i.grams_min, i.grams_max)
+    ]
+    if not needy:
+        return ""
+    if len(needy) == 1:
+        it = needy[0]
+        rng = portion_estimator.estimate_default_portion_grams(it.name)
+        mid = (rng.grams_min + rng.grams_max) / 2
+        tail = f"Укажите вес или подтвердите стандартную порцию (~{mid:.0f} г)."
+        return f"Я нашёл: {it.name}. " + tail
+    parts: list[str] = []
+    for it in needy:
+        rng = portion_estimator.estimate_default_portion_grams(it.name)
+        mid = (rng.grams_min + rng.grams_max) / 2
+        parts.append(f"«{it.name}» (~{mid:.0f} г)")
+    return (
+        "Я нашёл несколько продуктов без точного веса: "
+        + ", ".join(parts)
+        + ". Укажите вес для каждого или подтвердите порции."
+    )
+
+
+def _maybe_drop_blocking_clarification_after_single_resolved(
+    result: FoodRecognitionResult,
+    items: list[FoodItemRecognition],
+) -> FoodRecognitionResult:
+    """After grams/count are applied to a single-item draft, drop stale blocking prompts."""
+    if len(items) != 1:
+        return result.model_copy(update={"items": items})
+    it = items[0]
+    if not has_quantified_portion_mass(it.estimated_grams, it.grams_min, it.grams_max):
+        return result.model_copy(update={"items": items})
+    return result.model_copy(
+        update={
+            "items": items,
+            "needs_clarification": False,
+            "clarification_question": None,
+        }
+    )
+
+
 @dataclass(frozen=True)
 class NutritionEstimate:
     """Nutrition values for a food per 100 grams."""
@@ -846,6 +892,13 @@ class CalorieService:
         if patched_items:
             ov = min(i.confidence for i in patched_items)
 
+        clar_in = (result.clarification_question or "").strip()
+        auto_clar = (
+            _build_missing_portion_clarification(patched_items).strip() if need_portion else ""
+        )
+        final_clar = clar_in or auto_clar
+        needs_clar_out = bool(result.needs_clarification or need_portion)
+
         out = FoodRecognitionResult(
             items=patched_items,
             total_calories=total_mid,
@@ -854,8 +907,8 @@ class CalorieService:
             overall_confidence=ov,
             comment=(result.comment or "").strip() or "Оценка приёма пищи",
             meal_type=result.meal_type,
-            needs_clarification=result.needs_clarification,
-            clarification_question=result.clarification_question,
+            needs_clarification=needs_clar_out,
+            clarification_question=final_clar or None,
             needs_portion_clarification=need_portion,
             has_estimated_items=has_est,
         )
@@ -950,6 +1003,8 @@ class CalorieService:
                     f"(например «пармезан 50 г» или «макароны 200 г и твёрдый сыр 30 г»)."
                 )
             elif it.needs_portion_clarification:
+                if it.name.lower() in prev_q:
+                    continue
                 needle = f"«{it.name}»"
                 if needle.lower() not in prev_q:
                     extras.append(
@@ -1063,7 +1118,8 @@ class CalorieService:
             )
         items = list(result.items)
         items[index - 1] = self._apply_portion_clarification_rules(new_item)
-        return self._rebuild(result.model_copy(update={"items": items}))
+        merged = _maybe_drop_blocking_clarification_after_single_resolved(result, items)
+        return self._rebuild(merged)
 
     def apply_quantity_to_item(
         self,
@@ -1143,7 +1199,8 @@ class CalorieService:
             )
         items = list(result.items)
         items[index - 1] = self._apply_portion_clarification_rules(new_item)
-        return self._rebuild(result.model_copy(update={"items": items}))
+        merged = _maybe_drop_blocking_clarification_after_single_resolved(result, items)
+        return self._rebuild(merged)
 
     def update_calories(
         self,
