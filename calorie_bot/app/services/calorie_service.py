@@ -993,7 +993,23 @@ class CalorieService:
         extras: list[str] = []
         prev_q = (result.clarification_question or "").strip().lower()
 
-        if self.is_low_confidence(result) and "неточн" not in prev_q and "уверен" not in prev_q:
+        user_like_grams = (
+            GramsSource.USER.value,
+            GramsSource.USER_QUANTITY.value,
+            GramsSource.TEXT_CORRECTION.value,
+            GramsSource.VOICE_CORRECTION.value,
+        )
+        all_have_pinned_mass = result.items and all(
+            has_quantified_portion_mass(it.estimated_grams, it.grams_min, it.grams_max)
+            and (it.grams_source in user_like_grams)
+            for it in result.items
+        )
+        if (
+            self.is_low_confidence(result)
+            and not all_have_pinned_mass
+            and "неточн" not in prev_q
+            and "уверен" not in prev_q
+        ):
             extras.append("Оценка неточная — уточните состав или вес в граммах.")
 
         for it in result.items:

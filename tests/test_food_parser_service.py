@@ -1,6 +1,7 @@
 """Tests for user gram extraction and priority over AI portion estimates."""
 
 from calorie_bot.app.ai.schemas import FoodItemRecognition, FoodRecognitionResult
+from calorie_bot.app.domain import GramsSource
 from calorie_bot.app.services.calorie_service import CalorieService
 from calorie_bot.app.services.food_parser_service import (
     apply_user_gram_priority,
@@ -47,6 +48,40 @@ def test_parse_loose_grams_line_accepts_bare_number_and_suffix() -> None:
     assert parse_loose_grams_line("  80 г ") == 80.0
     assert parse_loose_grams_line("яблоко") is None
     assert parse_loose_grams_line("") is None
+
+
+def test_apply_user_gram_priority_pins_user_source_when_grams_already_match_ai() -> None:
+    """Explicit user grams must clear stale blocking clarification even if values match the model."""
+    svc = CalorieService()
+    raw = FoodRecognitionResult(
+        items=[
+            FoodItemRecognition(
+                name="шарлотка",
+                portion_description="100 г",
+                estimated_grams=100.0,
+                calories=200,
+                calories_per_100g=200.0,
+                protein=3.0,
+                fat=4.0,
+                carbs=40.0,
+                food_confidence=0.4,
+                portion_confidence=0.85,
+                grams_source=GramsSource.AI_PHOTO.value,
+                needs_portion_clarification=False,
+                confidence=0.4,
+            )
+        ],
+        total_calories=200,
+        overall_confidence=0.4,
+        comment="x",
+        needs_clarification=True,
+        clarification_question="Уточните рецепт.",
+    )
+    raw = svc.validate_food_result(raw)
+    out = apply_user_gram_priority("кусок пирога шарлотка 100 грамм", raw, svc)
+    assert out.items[0].grams_source == GramsSource.USER.value
+    assert out.needs_clarification is False
+    assert out.clarification_question is None
 
 
 def test_extract_ordered_gram_values_finds_mass_units() -> None:

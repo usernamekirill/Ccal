@@ -315,16 +315,14 @@ def apply_user_gram_priority(
 
     if n_items == 1:
         target = values[-1]
-        cur = out.items[0].estimated_grams
-        if cur is None or abs(float(cur) - target) > 1e-6:
-            out = calorie_service.update_grams(out, 1, target, grams_source=src)
+        # Always route through ``update_grams`` so user-stated mass pins ``grams_source``
+        # and stale blocking clarification is cleared even when AI already matched the value.
+        out = calorie_service.update_grams(out, 1, target, grams_source=src)
         return out
 
     if n_items == n_grams:
         for idx, grams in enumerate(values):
-            cur = out.items[idx].estimated_grams
-            if cur is None or abs(float(cur) - grams) > 1e-6:
-                out = calorie_service.update_grams(out, idx + 1, grams, grams_source=src)
+            out = calorie_service.update_grams(out, idx + 1, grams, grams_source=src)
         return out
 
     if n_grams == 1 and n_items > 1:
@@ -336,9 +334,7 @@ def apply_user_gram_priority(
             item_idx = ord_i + 1
         else:
             item_idx = _best_item_index_for_lone_gram(user_text, out.items, pos) + 1
-        cur = out.items[item_idx - 1].estimated_grams
-        if cur is None or abs(float(cur) - g) > 1e-6:
-            out = calorie_service.update_grams(out, item_idx, g, grams_source=src)
+        out = calorie_service.update_grams(out, item_idx, g, grams_source=src)
         return out
 
     return out
