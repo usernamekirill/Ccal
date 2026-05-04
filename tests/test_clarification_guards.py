@@ -62,3 +62,19 @@ def test_guard_skips_when_user_gave_grams() -> None:
     guarded = svc.apply_clarification_guards(out)
     assert guarded.needs_clarification is False
     assert not (guarded.clarification_question or "").strip()
+
+
+def test_guard_empty_items_sets_blocking_question() -> None:
+    """Empty parse must not fall through silent; user gets a clarification (spec: no silent miss)."""
+    svc = CalorieService()
+    r = FoodRecognitionResult(
+        items=[],
+        total_calories=0,
+        overall_confidence=0.5,
+        comment="t",
+    )
+    out = svc.validate_food_result(r)
+    guarded = svc.apply_clarification_guards(out)
+    assert guarded.needs_clarification is True
+    assert guarded.clarification_question
+    assert "грамм" in guarded.clarification_question.lower() or "калор" in guarded.clarification_question.lower()

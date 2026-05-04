@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -27,9 +28,11 @@ from calorie_bot.app.services.user_service import UserService
 from calorie_bot.app.services.user_settings_service import create_user_settings_service
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
+from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
 from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="voice")
+_log = logging.getLogger(__name__)
 
 
 @router.message(F.voice | F.audio)
@@ -123,6 +126,7 @@ async def handle_voice_or_audio(
             default_meal_type=default_meal_type.value,
         )
     except Exception:
+        _log.exception("voice_meal_parse_failed")
         await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
 
@@ -133,6 +137,7 @@ async def handle_voice_or_audio(
             result, transcript, session, settings
         )
     except Exception:
+        _log.exception("voice_meal_enrich_failed")
         await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
 
@@ -140,11 +145,13 @@ async def handle_voice_or_audio(
     if calorie_service.requires_blocking_clarification(result):
         await state.set_state(MealStates.waiting_for_correction)
         await state.update_data(
-            pending_text_food=transcript,
-            pending_food_result_draft=calorie_service.result_to_dict(result),
-            clarification_mode="text_draft",
-            default_meal_type=default_meal_type.value,
-            voice_transcript=transcript,
+            **fsm_data_blocking_text_clarification(
+                calorie_service,
+                result,
+                pending_text=transcript,
+                default_meal_type=default_meal_type.value,
+                voice_transcript=transcript,
+            ),
         )
         await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
         return

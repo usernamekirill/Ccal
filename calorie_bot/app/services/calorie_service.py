@@ -906,7 +906,19 @@ class CalorieService:
     def apply_clarification_guards(self, result: FoodRecognitionResult) -> FoodRecognitionResult:
         """Append rule-based clarification prompts; set ``needs_clarification`` when needed."""
         if not result.items:
-            return result
+            q = (result.clarification_question or "").strip()
+            if result.needs_clarification and q:
+                return result
+            return result.model_copy(
+                update={
+                    "needs_clarification": True,
+                    "clarification_question": (
+                        "Не смог точно определить продукты. Уточните блюдо и граммы "
+                        "(например «макароны 200 г и твёрдый сыр 30 г»), "
+                        "или добавьте калории вручную (например «…, 350 ккал»)."
+                    ),
+                }
+            )
         extras: list[str] = []
         prev_q = (result.clarification_question or "").strip().lower()
 

@@ -9,12 +9,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from calorie_bot.app.ai.food_result_correction_service import FoodResultCorrectionService
 from calorie_bot.app.ai.photo_service import AIPhotoService
 from calorie_bot.app.config import Settings
 from calorie_bot.app.database.telegram_safe_commit import commit_db_work_before_telegram
 from calorie_bot.app.domain import MealSource, MealStatus, MealType
-from calorie_bot.app.keyboards.confirmation import draft_cancelled_keyboard
+from calorie_bot.app.keyboards.confirmation import draft_cancelled_keyboard, recognition_trouble_keyboard
 from calorie_bot.app.keyboards.meal import photo_review_keyboard
 from calorie_bot.app.keyboards.nav_footer import navigation_footer_keyboard
 from calorie_bot.app.messages.texts import (
@@ -24,6 +23,7 @@ from calorie_bot.app.messages.texts import (
     PHOTO_PROCESSING_TEXT,
     PHOTO_QUICK_ADD_TEXT,
     PHOTO_QUICK_DELETE_TEXT,
+    RECOGNITION_UNCERTAIN_TEXT,
     TEXT_FOOD_CLARIFICATION_PREFIX,
 )
 from calorie_bot.app.messages.ux_flow import MEAL_CANCEL_FOLLOWUP
@@ -31,6 +31,7 @@ from calorie_bot.app.post_action_message import send_post_action_message
 from calorie_bot.app.repositories.meal_change_log_repository import MealChangeLogRepository
 from calorie_bot.app.repositories.meal_repository import MealRepository
 from calorie_bot.app.services.calorie_service import CalorieService
+from calorie_bot.app.services.edit_interpreter_service import apply_instruction_to_food_result
 from calorie_bot.app.services.daily_stats_sync import on_confirmed_meal_edited, on_meal_confirmed
 from calorie_bot.app.services.goal_service import GoalService
 from calorie_bot.app.services.meal_service import MealService
@@ -300,7 +301,12 @@ async def choose_photo_edit(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 @router.message(MealStates.photo_editing, F.text)
-async def apply_photo_edit(message: Message, state: FSMContext, settings: Settings) -> None:
+async def apply_photo_edit(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
     """Apply quick add/delete or NLP correction."""
     data = await state.get_data()
     action = str(data.get("photo_edit_action", "flex"))
@@ -323,9 +329,26 @@ async def apply_photo_edit(message: Message, state: FSMContext, settings: Settin
         elif action == "delete":
             updated = service.delete_item(result, int(instruction.strip()))
         elif action == "flex":
-            corrected = await FoodResultCorrectionService(settings).apply(result, instruction)
-            corrected = service.apply_user_text_gram_priority(instruction, corrected)
-            updated = service.validate_food_result(corrected)
+            updated = await apply_instruction_to_food_result(
+                settings,
+                instruction,
+                result,
+                session=session,
+            )
+            updated = service.apply_clarification_guards(updated)
+            if service.requires_blocking_clarification(updated):
+                await state.set_state(MealStates.waiting_for_correction)
+                await state.update_data(
+                    photo_food_result=service.result_to_dict(updated),
+                    clarification_mode="photo",
+                    photo_edit_action=None,
+                    pending_food_result_draft=None,
+                )
+                await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{updated.clarification_question}")
+                return
+            if not updated.items:
+                await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+                return
         else:
             await message.answer(PHOTO_EDIT_ERROR_TEXT)
             return
@@ -342,7 +365,10 @@ async def apply_photo_edit(message: Message, state: FSMContext, settings: Settin
         photo_food_result=service.result_to_dict(updated),
         photo_edit_action=None,
     )
-    await message.answer(service.format_result(updated), reply_markup=photo_review_keyboard())
+    reply = service.format_result(updated)
+    if updated.needs_clarification and updated.clarification_question:
+        reply = f"{reply}\n\n⚠️ {updated.clarification_question}"
+    await message.answer(reply, reply_markup=photo_review_keyboard())
 
 
 def _result_from_state(data: dict) -> object:

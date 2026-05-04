@@ -57,6 +57,11 @@ FOOD_TEXT_PARSER_PROMPT = (
     "Если для строки указана масса, но ты не уверен в calories_per_100g — оцени разумно; если совсем нельзя — "
     "needs_clarification=true и один короткий clarification_question.\n"
     "Если данных мало — needs_clarification=true и короткий clarification_question.\n"
+    "НЕ возвращай пустой items[], если пользователь явно назвал еду или блюдо: либо минимум одна строка items, "
+    "либо needs_clarification=true с вопросом (например нет граммов — спроси вес).\n"
+    "Составные блюда («макароны с сыром»): два продукта или один item с отдельными порциями в portion_description; "
+    "если нельзя разделить надёжно — needs_clarification с вопросами про граммы макарон и вид сыра (твёрдый/плавленый и т.п.).\n"
+    "Одно слово «пармезан»/«сыр» без граммов: выставь needs_portion_clarification или needs_clarification с предложением веса (20/50/100 г).\n"
     "Не используй markdown."
 )
 

@@ -42,4 +42,5 @@ def test_format_today_stats_appends_macro_block() -> None:
     )
     out = format_today_stats(view)
     assert "Съедено" in out
+    assert "Калории:" in out
     assert "КБЖУ за день" in out

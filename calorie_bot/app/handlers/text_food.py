@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -26,9 +27,11 @@ from calorie_bot.app.services.user_settings_service import create_user_settings_
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.states.settings import SettingsStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
+from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
 from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="text_food")
+_log = logging.getLogger(__name__)
 
 
 @router.message(MealStates.waiting_for_correction, F.text)
@@ -132,6 +135,7 @@ async def handle_text_food_clarification(
             default_meal_type=default_meal_type,
         )
     except Exception:
+        _log.exception("text_meal_clarification_parse_failed")
         await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
 
@@ -142,6 +146,7 @@ async def handle_text_food_clarification(
             result, combined_text, session, settings
         )
     except Exception:
+        _log.exception("text_meal_clarification_enrich_failed")
         await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
 
@@ -149,10 +154,12 @@ async def handle_text_food_clarification(
     if calorie_service.requires_blocking_clarification(result):
         await state.set_state(MealStates.waiting_for_correction)
         await state.update_data(
-            pending_text_food=original_text,
-            pending_food_result_draft=calorie_service.result_to_dict(result),
-            clarification_mode="text_draft",
-            default_meal_type=default_meal_type,
+            **fsm_data_blocking_text_clarification(
+                calorie_service,
+                result,
+                pending_text=combined_text,
+                default_meal_type=default_meal_type,
+            ),
         )
         await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
         return
@@ -279,6 +286,7 @@ async def handle_text_food(
             default_meal_type=default_meal_type.value,
         )
     except Exception:
+        _log.exception("text_meal_parse_failed")
         await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
 
@@ -290,6 +298,7 @@ async def handle_text_food(
             result, message.text, session, settings
         )
     except Exception:
+        _log.exception("text_meal_enrich_failed")
         await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
 
@@ -297,10 +306,12 @@ async def handle_text_food(
     if calorie_service.requires_blocking_clarification(result):
         await state.set_state(MealStates.waiting_for_correction)
         await state.update_data(
-            pending_text_food=message.text,
-            pending_food_result_draft=calorie_service.result_to_dict(result),
-            clarification_mode="text_draft",
-            default_meal_type=default_meal_type.value,
+            **fsm_data_blocking_text_clarification(
+                calorie_service,
+                result,
+                pending_text=message.text,
+                default_meal_type=default_meal_type.value,
+            ),
         )
         await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
         return

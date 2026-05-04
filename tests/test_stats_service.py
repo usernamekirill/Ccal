@@ -105,7 +105,7 @@ async def test_today_view_shows_goal_progress_and_food() -> None:
     body = format_today_stats(view)
     assert "500" in body
     assert "2000" in body
-    assert "Прогресс:" in body
+    assert "Калории:" in body
 
 
 @pytest.mark.asyncio

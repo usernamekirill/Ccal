@@ -93,7 +93,9 @@ def format_today_stats(view: StatsTodayView) -> str:
                 progress_percent=view.progress_percent,
                 remaining_kcal=view.remaining_kcal,
             )
-            lines.append(f"Прогресс: {bar}{suf}")
+            lines.append("")
+            lines.append("Калории:")
+            lines.append(f"{bar}{suf}")
     else:
         lines.append("Цель по калориям не задана — укажи её в онбординге.")
 
