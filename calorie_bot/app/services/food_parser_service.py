@@ -105,6 +105,9 @@ def apply_portion_qualifier_text(
     """Scale a single-item draft when the user says small/medium/large/half portion."""
     if not user_text or not user_text.strip() or len(result.items) != 1:
         return result
+    from calorie_bot.app.nlp.meal_text_preprocess import normalize_meal_input_text
+
+    user_text = normalize_meal_input_text(user_text)
     if _gram_matches_with_positions(user_text):
         return result
     t = user_text.lower()
@@ -157,6 +160,9 @@ def apply_user_quantity_from_text(
     """Expand «2 яблока»-style input using reference unit weights (after explicit grams are ruled out)."""
     if not user_text or not user_text.strip() or not result.items:
         return result, False
+    from calorie_bot.app.nlp.meal_text_preprocess import normalize_meal_input_text
+
+    user_text = normalize_meal_input_text(user_text)
     parsed = parse_quantity_phrase(user_text)
     if parsed is None:
         return result, False
@@ -200,6 +206,9 @@ def apply_user_gram_priority(
     """Re-scale items when the user gave explicit grams; user mass overrides AI portions."""
     if not user_text or not user_text.strip():
         return result
+    from calorie_bot.app.nlp.meal_text_preprocess import normalize_meal_input_text
+
+    user_text = normalize_meal_input_text(user_text)
 
     gram_values = extract_ordered_gram_values(user_text)
     has_grams = bool(gram_values)
@@ -268,9 +277,13 @@ def try_simple_gram_meal_text(text: str) -> FoodRecognitionResult | None:
     Handles patterns such as «гречка 200г», «170 грам шарлотки» (after :data:`_GRAM_PATTERN` fix).
     Returns ``None`` if the message is not exactly one mass + one food name chunk.
     """
+    from calorie_bot.app.nlp.meal_text_preprocess import (
+        canonicalize_food_phrase,
+        normalize_meal_input_text,
+    )
     from calorie_bot.app.services.calorie_service import normalize_food_name
 
-    t = (text or "").strip()
+    t = normalize_meal_input_text(text)
     if not t or len(t) > 800:
         return None
     matches = list(_GRAM_PATTERN.finditer(t))
@@ -289,6 +302,9 @@ def try_simple_gram_meal_text(text: str) -> FoodRecognitionResult | None:
     if len(name) < 2:
         return None
     name = normalize_food_name(name)
+    if not name or len(name) < 2:
+        return None
+    name = canonicalize_food_phrase(name)
     if not name or len(name) < 2:
         return None
     item = FoodItemRecognition(

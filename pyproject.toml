@@ -32,6 +32,7 @@ packages = [
     "calorie_bot.app.keyboards",
     "calorie_bot.app.messages",
     "calorie_bot.app.middleware",
+    "calorie_bot.app.nlp",
     "calorie_bot.app.ratelimit",
     "calorie_bot.app.repositories",
     "calorie_bot.app.security",
