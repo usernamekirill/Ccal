@@ -43,12 +43,32 @@ _FOOD_FROM_FRAGMENT: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\bяйц\w*\b"), "яйцо"),
     (re.compile(r"\bапельсин\w*\b"), "апельсин"),
     (re.compile(r"\bгруш\w*\b"), "груша"),
+    (re.compile(r"\bблин\w*\b"), "блин"),
+    (re.compile(r"\bсырник\w*\b"), "сырник"),
 ]
 
 _SLICE_WORD = re.compile(
     r"\b(?:кусоч\w*|ломт(ик|ика|иков|ика хлеба)?)\b",
     re.IGNORECASE | re.UNICODE,
 )
+
+# «2 блина по 70 г» → per-piece mass overrides reference table.
+_PER_UNIT_GRAM = re.compile(
+    r"\s+по\s+(\d+[.,]?\d*)\s*(?:г(?:рамм\w*)?|гр)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+
+
+def _strip_per_unit_grams(fragment: str) -> tuple[str, float | None]:
+    """Remove «по N г» suffix and return cleaned fragment plus grams per unit if found."""
+    m = _PER_UNIT_GRAM.search(fragment)
+    if not m:
+        return fragment, None
+    g = float(m.group(1).replace(",", "."))
+    left = fragment[: m.start()].strip()
+    right = fragment[m.end() :].strip()
+    cleaned = f"{left} {right}".strip()
+    return cleaned, g
 
 
 def _strip_size_prefix(fragment: str) -> tuple[str | None, str]:
@@ -125,6 +145,7 @@ class ParsedQuantityPhrase:
     quantity: float
     unit_type: str
     size_modifier: str | None
+    per_unit_grams: float | None = None
 
 
 def parse_quantity_phrase(user_text: str) -> ParsedQuantityPhrase | None:
@@ -145,6 +166,7 @@ def parse_quantity_phrase(user_text: str) -> ParsedQuantityPhrase | None:
     if re.match(r"^(?:половина|пол)\s+", lower):
         quantity = 0.5
         rest = re.sub(r"^(?:половина|пол)\s+", "", text, count=1, flags=re.I).strip()
+        rest, per_g = _strip_per_unit_grams(rest)
         ut, tail = _detect_unit_type(rest)
         key = canonical_food_key(tail if tail else rest)
         if key is None:
@@ -154,6 +176,7 @@ def parse_quantity_phrase(user_text: str) -> ParsedQuantityPhrase | None:
             quantity=quantity,
             unit_type=ut,
             size_modifier=size_modifier,
+            per_unit_grams=per_g,
         )
 
     m_pieces = re.match(r"^(\d+[\.,]?\d*)\s+штук\w*\b", lower)
@@ -171,8 +194,9 @@ def parse_quantity_phrase(user_text: str) -> ParsedQuantityPhrase | None:
     if sz0 and after_size:
         q2, after_num = _parse_leading_number(after_size)
         if q2 is None:
-            ut, tail = _detect_unit_type(after_size)
-            key = canonical_food_key(tail if tail else after_size)
+            cleaned, per_g = _strip_per_unit_grams(after_size)
+            ut, tail = _detect_unit_type(cleaned)
+            key = canonical_food_key(tail if tail else cleaned)
             if key is None:
                 return None
             return ParsedQuantityPhrase(
@@ -180,6 +204,7 @@ def parse_quantity_phrase(user_text: str) -> ParsedQuantityPhrase | None:
                 quantity=1.0,
                 unit_type=ut,
                 size_modifier=sz0,
+                per_unit_grams=per_g,
             )
         rest = after_size
 
@@ -194,6 +219,7 @@ def parse_quantity_phrase(user_text: str) -> ParsedQuantityPhrase | None:
     else:
         tail = after_num
 
+    tail, per_g = _strip_per_unit_grams(tail)
     ut, name_fragment = _detect_unit_type(tail)
     key = canonical_food_key(name_fragment if name_fragment else tail)
     if key is None:
@@ -204,4 +230,5 @@ def parse_quantity_phrase(user_text: str) -> ParsedQuantityPhrase | None:
         quantity=quantity,
         unit_type=ut,
         size_modifier=size_modifier,
+        per_unit_grams=per_g,
     )

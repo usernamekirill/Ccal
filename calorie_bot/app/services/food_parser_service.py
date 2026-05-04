@@ -157,10 +157,10 @@ def apply_user_quantity_from_text(
     """Expand «2 яблока»-style input using reference unit weights (after explicit grams are ruled out)."""
     if not user_text or not user_text.strip() or not result.items:
         return result, False
-    if extract_ordered_gram_values(user_text):
-        return result, False
     parsed = parse_quantity_phrase(user_text)
     if parsed is None:
+        return result, False
+    if extract_ordered_gram_values(user_text) and parsed.per_unit_grams is None:
         return result, False
     idx = resolve_quantity_target_index(parsed, result.items)
     if idx is None:
@@ -174,6 +174,7 @@ def apply_user_quantity_from_text(
             unit_type=parsed.unit_type,
             food_key=food_key,
             size_modifier=parsed.size_modifier,
+            per_unit_grams=parsed.per_unit_grams,
         )
     except ValueError:
         return result, False
@@ -200,14 +201,22 @@ def apply_user_gram_priority(
     if not user_text or not user_text.strip():
         return result
 
-    has_grams = bool(extract_ordered_gram_values(user_text))
+    gram_values = extract_ordered_gram_values(user_text)
+    has_grams = bool(gram_values)
+    parsed_qty = parse_quantity_phrase(user_text)
+    try_qty_first = (not has_grams) or (
+        parsed_qty is not None and parsed_qty.per_unit_grams is not None
+    )
     out = result
     qty_applied = False
-    if not has_grams:
+    if try_qty_first:
         out, qty_applied = apply_user_quantity_from_text(user_text, out, calorie_service)
 
     if not has_grams and not qty_applied:
         out = apply_portion_qualifier_text(user_text, out, calorie_service)
+
+    if qty_applied:
+        return out
 
     src = grams_source or GramsSource.USER.value
 

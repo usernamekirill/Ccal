@@ -70,6 +70,16 @@ class StatsService:
         has_approx = any(getattr(m, "has_estimated_items", False) for m in meals) or (
             estimated_ratio is not None and estimated_ratio > 0
         )
+        total_protein = (
+            sum(float(getattr(m, "total_protein_g", None) or 0) for m in meals) if meals else None
+        )
+        total_fat = sum(float(getattr(m, "total_fat_g", None) or 0) for m in meals) if meals else None
+        total_carbs = (
+            sum(float(getattr(m, "total_carbs_g", None) or 0) for m in meals) if meals else None
+        )
+        pt = getattr(profile, "daily_protein_target_g", None) if profile else None
+        ft = getattr(profile, "daily_fat_target_g", None) if profile else None
+        ct = getattr(profile, "daily_carbs_target_g", None) if profile else None
         return StatsTodayView(
             total_calories=total,
             calorie_target=target,
@@ -81,6 +91,12 @@ class StatsService:
             total_calories_min=t_lo if has_calorie_band else None,
             total_calories_max=t_hi if has_calorie_band else None,
             estimated_meals_ratio=estimated_ratio,
+            total_protein_g=round(total_protein, 1) if total_protein is not None else None,
+            total_fat_g=round(total_fat, 1) if total_fat is not None else None,
+            total_carbs_g=round(total_carbs, 1) if total_carbs is not None else None,
+            protein_target_g=pt,
+            fat_target_g=ft,
+            carbs_target_g=ct,
         )
 
     async def week_view(self, user_id: int) -> StatsWeekView:

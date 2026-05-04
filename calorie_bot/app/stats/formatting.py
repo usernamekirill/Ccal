@@ -11,6 +11,48 @@ def format_progress_bar(percent: float, width: int = 12) -> str:
     return f"[{'█' * filled}{'░' * (width - filled)}] {percent:.0f}%"
 
 
+_NEAR_GOAL_PCT = 85.0
+
+
+def _kcal_progress_suffix(*, progress_percent: float | None, remaining_kcal: int | None) -> str:
+    if remaining_kcal is not None and remaining_kcal < 0:
+        return " 🔴"
+    if progress_percent is not None and progress_percent >= _NEAR_GOAL_PCT:
+        return " ⚠️"
+    return ""
+
+
+def _macro_row(label: str, current: float, target: int | None, *, width: int = 10) -> str:
+    """One macro line: ASCII bar vs daily target when target exists."""
+    if target is None or target <= 0:
+        bar = format_progress_bar(0.0, width=width)
+        return f"{label}: {bar} — {current:.0f} г (цель не задана)"
+    pct = min(100.0, max(0.0, 100.0 * current / float(target)))
+    bar = format_progress_bar(pct, width=width)
+    suf = ""
+    if current > target * 1.01:
+        suf = " 🔴"
+    elif pct >= _NEAR_GOAL_PCT:
+        suf = " ⚠️"
+    return f"{label}: {bar}{suf} ({current:.0f}/{target} г)"
+
+
+def format_today_macro_dashboard(view: StatsTodayView) -> str | None:
+    """Optional KBJU block for /stats day view (uses sums from ``StatsService`` only)."""
+    if view.meals_count == 0:
+        return None
+    p, f_, c = view.total_protein_g, view.total_fat_g, view.total_carbs_g
+    if p is None and f_ is None and c is None:
+        return None
+    lines = [
+        "КБЖУ за день:",
+        _macro_row("Белки", float(p or 0), view.protein_target_g),
+        _macro_row("Жиры", float(f_ or 0), view.fat_target_g),
+        _macro_row("Углеводы", float(c or 0), view.carbs_target_g),
+    ]
+    return "\n".join(lines)
+
+
 def format_today_status_line(view: StatsTodayView) -> str:
     """Single-line daily progress for footers, menus, post-save, and quick status."""
     approx = getattr(view, "has_approximate_values", False)
@@ -47,9 +89,18 @@ def format_today_stats(view: StatsTodayView) -> str:
                 lines.append(f"Сверх цели на: {abs(view.remaining_kcal)} ккал")
         if view.progress_percent is not None:
             bar = format_progress_bar(view.progress_percent)
-            lines.append(f"Прогресс: {bar}")
+            suf = _kcal_progress_suffix(
+                progress_percent=view.progress_percent,
+                remaining_kcal=view.remaining_kcal,
+            )
+            lines.append(f"Прогресс: {bar}{suf}")
     else:
         lines.append("Цель по калориям не задана — укажи её в онбординге.")
+
+    macro_lines = format_today_macro_dashboard(view)
+    if macro_lines:
+        lines.append("")
+        lines.append(macro_lines)
 
     lines.append(f"Приёмов пищи: {view.meals_count}")
 

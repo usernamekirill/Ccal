@@ -1,6 +1,8 @@
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from calorie_bot.app.ai.schemas import (
     FoodItemRecognition,
@@ -17,13 +19,37 @@ from calorie_bot.app.domain import (
     PortionUnitType,
 )
 from calorie_bot.app.repositories.food_cache_repository import FoodCacheRepository
+from calorie_bot.app.services.nutrition_normalizer import (
+    atwater_calories_from_line_macros,
+    should_align_line_calories_with_macros,
+)
 from calorie_bot.app.services import portion_estimator
 from calorie_bot.app.services.nutrition_calculator import calories_from_per_100g, has_quantified_portion_mass
 from calorie_bot.app.utils import ux_formatter
 
+if TYPE_CHECKING:
+    from calorie_bot.app.config import Settings
+
 LOW_CONFIDENCE_THRESHOLD = 0.65
 MAX_ITEM_CALORIES = 5000
 MAX_ITEM_GRAMS = 5000
+
+# Short product names that usually need weight or type (rule-based clarification).
+_AMBIGUOUS_FOOD_KEYS = frozenset(
+    {
+        "сыр",
+        "колбаса",
+        "мясо",
+        "рыба",
+        "салат",
+        "суп",
+        "каша",
+        "творог",
+        "пармезан",
+        "макароны",
+    }
+)
+_MAX_CLARIFICATION_CHARS = 3500
 
 # Higher wins when deciding whether to replace grams (user/correction beats AI).
 _GRAMS_SOURCE_RANK: dict[str, int] = {
@@ -467,23 +493,169 @@ class CalorieService:
         return result.model_copy(update={"items": new_items})
 
     def _backfill_legacy_item(self, item: FoodItemRecognition) -> FoodItemRecognition:
-        """Infer calories_per_100g from legacy calories/grams if missing."""
-        if item.calories_per_100g is not None:
+        """Infer calories_per_100g from legacy calories/grams if missing; then derive line kcal/macros."""
+        item_work = item
+        if item_work.calories_per_100g is None:
+            grams = item_work.estimated_grams
+            if grams and item_work.calories is not None and float(grams) > 0:
+                per = float(item_work.calories) * 100.0 / float(grams)
+                item_work = item_work.model_copy(
+                    update={
+                        "calories_per_100g": round(per, 2),
+                        "grams_source": item_work.grams_source
+                        if item_work.grams_source != GramsSource.UNKNOWN.value
+                        else GramsSource.AI_PHOTO.value,
+                    }
+                )
+            elif item_work.calories is not None and item_work.calories_min is None:
+                item_work = item_work.model_copy(update={"calories_per_100g": 200.0})
+        return self._recompute_point_mass_totals_from_per_100g(item_work)
+
+    def _recompute_point_mass_totals_from_per_100g(self, item: FoodItemRecognition) -> FoodItemRecognition:
+        """Derive line calories and macros from ``calories_per_100g`` × ``estimated_grams`` when absent."""
+        if item.calories_per_100g is None:
             return item
-        grams = item.estimated_grams
-        if grams and item.calories is not None and float(grams) > 0:
-            per = float(item.calories) * 100.0 / float(grams)
-            return item.model_copy(
-                update={
-                    "calories_per_100g": round(per, 2),
-                    "grams_source": item.grams_source
-                    if item.grams_source != GramsSource.UNKNOWN.value
-                    else GramsSource.AI_PHOTO.value,
-                }
+        g = item.estimated_grams
+        if g is None or float(g) <= 0:
+            return item
+        if item.grams_min is not None or item.grams_max is not None:
+            return item
+        g_float = float(g)
+        per = float(item.calories_per_100g)
+        updates: dict[str, object] = {}
+        if item.calories is None:
+            updates["calories"] = self.calculate_item_calories(per, g_float)
+        if item.protein is None and item.protein_per_100g is not None:
+            updates["protein"] = _from_per_100g(item.protein_per_100g, g_float)
+        if item.fat is None and item.fat_per_100g is not None:
+            updates["fat"] = _from_per_100g(item.fat_per_100g, g_float)
+        if item.carbs is None and item.carbs_per_100g is not None:
+            updates["carbs"] = _from_per_100g(item.carbs_per_100g, g_float)
+        if not updates:
+            return item
+        return item.model_copy(update=updates)
+
+    def _reconcile_point_mass_atwater(self, item: FoodItemRecognition) -> FoodItemRecognition:
+        """When Б, Ж, У are known for a point mass, align line kcal with Atwater (4/9/4) if density disagrees."""
+        if item.grams_min is not None or item.grams_max is not None:
+            return item
+        g = item.estimated_grams
+        if g is None or float(g) <= 0:
+            return item
+        if not should_align_line_calories_with_macros(
+            item.protein,
+            item.fat,
+            item.carbs,
+            item.calories,
+        ):
+            return item
+        atw = atwater_calories_from_line_macros(item.protein, item.fat, item.carbs)
+        if atw is None:
+            return item
+        g_float = float(g)
+        new_per = round(atw * 100.0 / g_float, 2) if g_float > 0 else item.calories_per_100g
+        return item.model_copy(update={"calories": atw, "calories_per_100g": new_per})
+
+    async def hydrate_items_missing_nutrition_density(
+        self,
+        result: FoodRecognitionResult,
+        session: AsyncSession,
+        settings: "Settings",
+    ) -> FoodRecognitionResult:
+        """Fill missing ``calories_per_100g`` using food cache + AI estimate, then recompute line totals."""
+        from calorie_bot.app.ai.nutrition_estimator_service import AINutritionEstimatorService
+
+        cache = FoodCacheRepository(session)
+        estimator = AINutritionEstimatorService(settings)
+        new_items: list[FoodItemRecognition] = []
+        for item in result.items:
+            it = self._backfill_legacy_item(item)
+            g = it.estimated_grams
+            need_density = (
+                it.calories_per_100g is None
+                and g is not None
+                and float(g) > 0
+                and it.grams_min is None
+                and it.grams_max is None
+                and has_quantified_portion_mass(it.estimated_grams, it.grams_min, it.grams_max)
             )
-        if item.calories is not None and item.calories_min is None:
-            return item.model_copy(update={"calories_per_100g": 200.0})
-        return item
+            if need_density:
+                rich_name = normalize_food_name(item.name)
+                est_line = await self.get_or_estimate_food(rich_name, float(g), cache, estimator)
+                preserve_source = it.grams_source in (
+                    GramsSource.USER.value,
+                    GramsSource.TEXT_CORRECTION.value,
+                    GramsSource.VOICE_CORRECTION.value,
+                    GramsSource.USER_QUANTITY.value,
+                )
+                it = est_line.model_copy(
+                    update={
+                        "name": rich_name,
+                        "portion_description": item.portion_description or est_line.portion_description,
+                        "grams_source": it.grams_source if preserve_source else est_line.grams_source,
+                        "quantity": item.quantity,
+                        "unit_type": item.unit_type,
+                        "unit_weight_grams": item.unit_weight_grams,
+                        "size_modifier": item.size_modifier,
+                    }
+                )
+            it = self._recompute_point_mass_totals_from_per_100g(it)
+            new_items.append(it)
+        out = result.model_copy(update={"items": new_items})
+        return self.validate_food_result(out)
+
+    def separate_uncounted_quantified_items(self, result: FoodRecognitionResult) -> FoodRecognitionResult:
+        """Remove lines that have a known mass but no countable calories; ask the user to clarify.
+
+        Avoids showing products as logged when they are not included in meal energy totals.
+        """
+        dropped_names: list[str] = []
+        kept: list[FoodItemRecognition] = []
+        for item in result.items:
+            if not has_quantified_portion_mass(item.estimated_grams, item.grams_min, item.grams_max):
+                kept.append(item)
+                continue
+            if recognition_item_mid_calories(item) > 0:
+                kept.append(item)
+                continue
+            dropped_names.append(item.name)
+
+        if not dropped_names:
+            return result
+
+        msg = (
+            "Не смог точно посчитать: "
+            + ", ".join(dropped_names)
+            + ". Укажите вес, калории или уточните описание."
+        )
+        prev_q = (result.clarification_question or "").strip()
+        new_q = f"{prev_q}\n{msg}".strip() if prev_q else msg
+        out = result.model_copy(
+            update={
+                "items": kept,
+                "needs_clarification": True,
+                "clarification_question": new_q,
+            }
+        )
+        return out
+
+    async def enrich_after_text_processing(
+        self,
+        result: FoodRecognitionResult,
+        user_text: str | None,
+        session: AsyncSession,
+        settings: "Settings",
+    ) -> FoodRecognitionResult:
+        """Run food-cache + AI density fill for text flows, then drop uncounted mass-only lines.
+
+        Call after ``apply_user_text_gram_priority`` (and quantity rules). ``user_text`` is reserved
+        for future heuristics; hydration uses each item's name and grams.
+        """
+        _ = user_text
+        merged = await self.hydrate_items_missing_nutrition_density(result, session, settings)
+        merged = self.validate_food_result(merged)
+        merged = self.separate_uncounted_quantified_items(merged)
+        return self.validate_food_result(merged)
 
     def apply_user_text_gram_priority(
         self,
@@ -613,12 +785,6 @@ class CalorieService:
                         "needs_portion_clarification": True,
                     }
                 )
-            if item.calories is not None:
-                self.validate_calories(item.calories)
-            if item.calories_min is not None:
-                self.validate_calories(item.calories_min)
-            if item.calories_max is not None:
-                self.validate_calories(item.calories_max)
             if item.estimated_grams is not None:
                 self.validate_grams(item.estimated_grams)
             if item.grams_min is not None:
@@ -629,6 +795,13 @@ class CalorieService:
             _validate_optional_non_negative(item.protein, "protein")
             _validate_optional_non_negative(item.fat, "fat")
             _validate_optional_non_negative(item.carbs, "carbs")
+            item = self._reconcile_point_mass_atwater(item)
+            if item.calories is not None:
+                self.validate_calories(item.calories)
+            if item.calories_min is not None:
+                self.validate_calories(item.calories_min)
+            if item.calories_max is not None:
+                self.validate_calories(item.calories_max)
             patched_items.append(item)
 
         total_mid = sum(recognition_item_mid_calories(i) for i in patched_items)
@@ -706,6 +879,74 @@ class CalorieService:
         return result.overall_confidence < LOW_CONFIDENCE_THRESHOLD or any(
             item.confidence < LOW_CONFIDENCE_THRESHOLD for item in result.items
         )
+
+    def _ambiguous_name_requires_detail(self, item: FoodItemRecognition) -> bool:
+        """True for very generic names when the user did not pin grams via explicit input signals."""
+        key = normalize_food_name(item.name)
+        if key not in _AMBIGUOUS_FOOD_KEYS:
+            return False
+        if item.grams_source in (
+            GramsSource.USER.value,
+            GramsSource.TEXT_CORRECTION.value,
+            GramsSource.VOICE_CORRECTION.value,
+            GramsSource.USER_QUANTITY.value,
+        ):
+            return False
+        if item.needs_portion_clarification:
+            return True
+        if item.portion_confidence < LOW_CONFIDENCE_THRESHOLD:
+            return True
+        if item.grams_source in (
+            GramsSource.UNKNOWN.value,
+            GramsSource.DEFAULT_PORTION.value,
+        ):
+            return True
+        return False
+
+    def apply_clarification_guards(self, result: FoodRecognitionResult) -> FoodRecognitionResult:
+        """Append rule-based clarification prompts; set ``needs_clarification`` when needed."""
+        if not result.items:
+            return result
+        extras: list[str] = []
+        prev_q = (result.clarification_question or "").strip().lower()
+
+        if self.is_low_confidence(result) and "неточн" not in prev_q and "уверен" not in prev_q:
+            extras.append("Оценка неточная — уточните состав или вес в граммах.")
+
+        for it in result.items:
+            if self._ambiguous_name_requires_detail(it):
+                extras.append(
+                    f"Уточните «{it.name}»: вес и вид продукта "
+                    f"(например «пармезан 50 г» или «макароны 200 г и твёрдый сыр 30 г»)."
+                )
+            elif it.needs_portion_clarification:
+                needle = f"«{it.name}»"
+                if needle.lower() not in prev_q:
+                    extras.append(
+                        f"Укажите вес или количество для «{it.name}» (например 150 г или 2 шт.)."
+                    )
+
+        if not extras:
+            return result
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for line in extras:
+            low = line.lower()
+            if low not in seen:
+                seen.add(low)
+                deduped.append(line)
+
+        block = "\n".join(f"• {e}" for e in deduped)
+        prior = (result.clarification_question or "").strip()
+        new_q = f"{prior}\n{block}".strip() if prior else block
+        new_q = new_q[:_MAX_CLARIFICATION_CHARS]
+        return result.model_copy(update={"needs_clarification": True, "clarification_question": new_q})
+
+    def requires_blocking_clarification(self, result: FoodRecognitionResult) -> bool:
+        """True when the user should answer follow-up questions before the preview step."""
+        q = (result.clarification_question or "").strip()
+        return bool(result.needs_clarification and q)
 
     def update_name(
         self,

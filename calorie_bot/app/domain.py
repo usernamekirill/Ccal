@@ -230,6 +230,12 @@ class StatsTodayView:
     total_calories_min: int | None = None
     total_calories_max: int | None = None
     estimated_meals_ratio: float | None = None
+    total_protein_g: float | None = None
+    total_fat_g: float | None = None
+    total_carbs_g: float | None = None
+    protein_target_g: int | None = None
+    fat_target_g: int | None = None
+    carbs_target_g: int | None = None
 
 
 @dataclass(frozen=True)

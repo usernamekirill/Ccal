@@ -136,7 +136,7 @@ class FoodItemRecognition(BaseModel):
 class FoodRecognitionResult(BaseModel):
     """Validated AI recognition result for a meal photo or text."""
 
-    items: list[FoodItemRecognition] = Field(min_length=1)
+    items: list[FoodItemRecognition] = Field(default_factory=list)
     total_calories: int = Field(ge=0)
     total_calories_min: int | None = Field(default=None, ge=0)
     total_calories_max: int | None = Field(default=None, ge=0)

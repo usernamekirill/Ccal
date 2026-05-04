@@ -24,6 +24,7 @@ from calorie_bot.app.messages.texts import (
     PHOTO_PROCESSING_TEXT,
     PHOTO_QUICK_ADD_TEXT,
     PHOTO_QUICK_DELETE_TEXT,
+    TEXT_FOOD_CLARIFICATION_PREFIX,
 )
 from calorie_bot.app.messages.ux_flow import MEAL_CANCEL_FOLLOWUP
 from calorie_bot.app.post_action_message import send_post_action_message
@@ -41,6 +42,7 @@ from calorie_bot.app.services.user_settings_service import create_user_settings_
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
 from calorie_bot.app.utils.image_processor import ImageProcessor
+from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="photo")
 
@@ -123,11 +125,29 @@ async def handle_photo(
             message.caption.strip(),
             result,
         )
+    result = calorie_service.apply_clarification_guards(result)
+    if calorie_service.requires_blocking_clarification(result):
+        await state.set_state(MealStates.waiting_for_correction)
+        tz = ZoneInfo(settings.timezone)
+        default_mt = infer_meal_type(datetime.now(tz))
+        await state.update_data(
+            photo_food_result=calorie_service.result_to_dict(result),
+            clarification_mode="photo",
+            pending_text_food="",
+            default_meal_type=default_mt.value,
+            pending_food_result_draft=None,
+            photo_user_id=user.id,
+            food_source=MealSource.PHOTO.value,
+        )
+        await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+        return
     await state.set_state(MealStates.photo_review)
     await state.update_data(
         photo_food_result=calorie_service.result_to_dict(result),
         photo_user_id=user.id,
         food_source=MealSource.PHOTO.value,
+        clarification_mode=None,
+        pending_food_result_draft=None,
     )
     await message.answer(
         calorie_service.format_result(result),

@@ -2,6 +2,7 @@
 
 from calorie_bot.app.ai.schemas import FoodRecognitionResult
 from calorie_bot.app.domain import MealType
+from calorie_bot.app.utils.calories import calories_from_macros
 from calorie_bot.app.utils.nutrition_formatter import format_item_block, meal_has_unknown_portion_items
 
 
@@ -25,6 +26,14 @@ def _mid_item_calories(item) -> int:  # FoodItemRecognition
     return 0
 
 
+def _meal_macro_totals_g(items: list) -> tuple[float, float, float]:
+    """Sum point-macro grams across recognition lines (lines without protein count as 0)."""
+    p = sum(i.protein or 0 for i in items)
+    f = sum(i.fat or 0 for i in items)
+    c = sum(i.carbs or 0 for i in items)
+    return p, f, c
+
+
 def format_meal_review(
     result: FoodRecognitionResult,
     *,
@@ -42,6 +51,23 @@ def format_meal_review(
         lines.append("Итого: уточните порции, чтобы посчитать калории")
     else:
         lines.append(f"Итого: ≈ {result.total_calories} ккал")
+
+    if result.items:
+        p_tot, f_tot, c_tot = _meal_macro_totals_g(result.items)
+        if p_tot > 0 or f_tot > 0 or c_tot > 0:
+            lines.append(f"БЖУ всего: Б {p_tot:g} · Ж {f_tot:g} · У {c_tot:g} г")
+            atw_total = calories_from_macros(p_tot, f_tot, c_tot)
+            if (
+                result.total_calories > 0
+                and result.total_calories_min is None
+                and result.total_calories_max is None
+            ):
+                rel = abs(atw_total - result.total_calories) / float(result.total_calories)
+                if rel > 0.08:
+                    lines.append(
+                        f"⚠️ Сумма ккал ({result.total_calories}) и ккал из суммарного БЖУ "
+                        f"({atw_total}) заметно расходятся (~{rel * 100:.0f}%)."
+                    )
 
     mt = _meal_type_ru(result.meal_type)
     if mt:

@@ -59,6 +59,80 @@ def test_one_apple() -> None:
     assert abs(float(out.items[0].estimated_grams or 0) - 136) < 1.5
 
 
+def test_three_pancakes_reference_weight() -> None:
+    """Countable блины without explicit grams use reference unit mass × quantity."""
+    svc = CalorieService()
+    line = FoodItemRecognition(
+        name="блин",
+        portion_description="порция",
+        estimated_grams=55.0,
+        calories=150,
+        calories_per_100g=200.0,
+        protein_per_100g=5.0,
+        fat_per_100g=6.0,
+        carbs_per_100g=30.0,
+        food_confidence=0.9,
+        portion_confidence=0.8,
+        grams_source="ai_photo",
+    )
+    r = svc.validate_food_result(_base_result(line))
+    out = apply_user_gram_priority("3 блина", r, svc)
+    assert out.items[0].quantity == 3
+    assert abs(float(out.items[0].estimated_grams or 0) - 165.0) < 1.5
+
+
+def test_two_syrniki_word_quantity() -> None:
+    svc = CalorieService()
+    line = FoodItemRecognition(
+        name="сырник",
+        portion_description="порция",
+        estimated_grams=70.0,
+        calories=210,
+        calories_per_100g=300.0,
+        protein_per_100g=12.0,
+        fat_per_100g=15.0,
+        carbs_per_100g=30.0,
+        food_confidence=0.9,
+        portion_confidence=0.8,
+        grams_source="ai_photo",
+    )
+    r = svc.validate_food_result(_base_result(line))
+    out = apply_user_gram_priority("два сырника", r, svc)
+    assert out.items[0].quantity == 2
+    assert abs(float(out.items[0].estimated_grams or 0) - 140.0) < 1.5
+
+
+def test_two_pancakes_seventy_g_each_total_mass() -> None:
+    """«2 блина по 70 г» → 140 г total despite other gram tokens in phrase."""
+    svc = CalorieService()
+    line = FoodItemRecognition(
+        name="блин",
+        portion_description="порция",
+        estimated_grams=55.0,
+        calories=100,
+        calories_per_100g=180.0,
+        protein_per_100g=6.0,
+        fat_per_100g=3.0,
+        carbs_per_100g=25.0,
+        food_confidence=0.9,
+        portion_confidence=0.8,
+        grams_source="ai_photo",
+    )
+    r = svc.validate_food_result(_base_result(line))
+    out = apply_user_gram_priority("2 блина по 70 г", r, svc)
+    assert abs(float(out.items[0].estimated_grams or 0) - 140.0) < 1.5
+    assert out.items[0].unit_weight_grams == 70.0
+
+
+def test_two_apples_word_form() -> None:
+    """Spelled-out Russian quantities («два яблока») should match digit form."""
+    svc = CalorieService()
+    r = svc.validate_food_result(_base_result(_fruit()))
+    out = apply_user_gram_priority("два яблока", r, svc)
+    assert out.items[0].quantity == 2
+    assert abs(float(out.items[0].estimated_grams or 0) - 272) < 1.5
+
+
 def test_half_apple_via_phrase_parser() -> None:
     p = parse_quantity_phrase("половина яблока")
     assert p is not None

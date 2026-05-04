@@ -37,6 +37,16 @@ _REFERENCE_GRAMS: dict[tuple[str, str], dict[str, float]] = {
         PortionSizeModifier.MEDIUM.value: 170.0,
         PortionSizeModifier.LARGE.value: 220.0,
     },
+    ("блин", PortionUnitType.PIECE.value): {
+        PortionSizeModifier.SMALL.value: 45.0,
+        PortionSizeModifier.MEDIUM.value: 55.0,
+        PortionSizeModifier.LARGE.value: 70.0,
+    },
+    ("сырник", PortionUnitType.PIECE.value): {
+        PortionSizeModifier.SMALL.value: 55.0,
+        PortionSizeModifier.MEDIUM.value: 70.0,
+        PortionSizeModifier.LARGE.value: 90.0,
+    },
 }
 
 
