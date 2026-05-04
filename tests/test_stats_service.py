@@ -218,6 +218,25 @@ async def test_get_calorie_trend_includes_deviation_and_moving_average() -> None
     assert pytest.approx(trend[-1].moving_avg_calories) == 1900.0
 
 
+@pytest.mark.asyncio
+async def test_today_view_sums_separate_meals_as_independent_totals() -> None:
+    """Breakfast + lunch + snack: day total equals sum of meal.total_calories (one row per meal)."""
+    meals = [
+        _meal(1, datetime(2026, 4, 30, 8, 15, tzinfo=TZ), 140),
+        _meal(1, datetime(2026, 4, 30, 13, 30, tzinfo=TZ), 470),
+        _meal(1, datetime(2026, 4, 30, 16, 0, tzinfo=TZ), 71),
+    ]
+    service = StatsService(
+        stats_repository=FakeStatsRepository(meals),
+        profile_repository=FakeProfileRepository(calorie_target=2000),
+        default_timezone="Europe/Moscow",
+        now_factory=lambda tz: datetime(2026, 4, 30, 18, 0, tzinfo=tz),
+    )
+    view = await service.today_view(1)
+    assert view.meals_count == 3
+    assert view.total_calories == 140 + 470 + 71
+
+
 def test_progress_bar_caps_fill_at_100_but_shows_true_percent() -> None:
     """Bar width caps at 100% while label can exceed for over-target days."""
     bar = format_progress_bar(130.0)
