@@ -14,7 +14,6 @@ from calorie_bot.app.keyboards.confirmation import recognition_trouble_keyboard
 from calorie_bot.app.keyboards.meal import photo_review_keyboard
 from calorie_bot.app.messages.texts import (
     RECOGNITION_UNCERTAIN_TEXT,
-    TEXT_FOOD_CLARIFICATION_PREFIX,
     TEXT_FOOD_PROCESSING_TEXT,
 )
 from calorie_bot.app.security.input_validation import ensure_meal_text_length
@@ -27,11 +26,14 @@ from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.states.settings import SettingsStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
 from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
+from calorie_bot.app.utils.clarification_ux import (
+    format_blocking_clarification_message,
+    format_clarification_followup_prompt,
+)
 from calorie_bot.app.utils.draft_parse_context import (
     meal_parse_context,
     unresolved_clarifications_from_recognition,
 )
-from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="text_food")
 _log = logging.getLogger(__name__)
@@ -115,7 +117,8 @@ async def handle_waiting_for_weight(
                 default_meal_type=default_meal_type,
             ),
         )
-        await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+        _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
+        await message.answer(_clar_body, reply_markup=_clar_kb)
         return
 
     if not result.items:
@@ -128,7 +131,7 @@ async def handle_waiting_for_weight(
                 pending_food_result_draft=None,
                 pending_food=None,
             )
-            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX} {result.clarification_question}")
+            await message.answer(format_clarification_followup_prompt(result))
         else:
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
@@ -143,8 +146,6 @@ async def handle_waiting_for_weight(
         clarification_mode=None,
     )
     reply = calorie_service.format_result(result)
-    if result.needs_clarification and result.clarification_question:
-        reply = f"{reply}\n\n⚠️ {result.clarification_question}"
     await message.answer(reply, reply_markup=photo_review_keyboard())
 
 
@@ -203,7 +204,8 @@ async def handle_text_food_clarification(
         updated = calorie_service.apply_clarification_guards(updated)
         if calorie_service.requires_blocking_clarification(updated):
             await state.update_data(photo_food_result=calorie_service.result_to_dict(updated))
-            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{updated.clarification_question}")
+            _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, updated)
+            await message.answer(_clar_body, reply_markup=_clar_kb)
             return
         await state.set_state(MealStates.photo_review)
         await state.update_data(
@@ -215,8 +217,6 @@ async def handle_text_food_clarification(
             food_source=data.get("food_source", MealSource.TEXT_AI.value),
         )
         reply = calorie_service.format_result(updated)
-        if updated.needs_clarification and updated.clarification_question:
-            reply = f"{reply}\n\n⚠️ {updated.clarification_question}"
         await message.answer(reply, reply_markup=photo_review_keyboard())
         return
 
@@ -272,7 +272,8 @@ async def handle_text_food_clarification(
                 clarification_mode="text_draft",
                 pending_food=pf,
             )
-            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+            _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
+            await message.answer(_clar_body, reply_markup=_clar_kb)
             return
         if not result.items:
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
@@ -287,8 +288,6 @@ async def handle_text_food_clarification(
             food_source=MealSource.TEXT_AI.value,
         )
         reply = calorie_service.format_result(result)
-        if result.needs_clarification and result.clarification_question:
-            reply = f"{reply}\n\n⚠️ {result.clarification_question}"
         await message.answer(reply, reply_markup=photo_review_keyboard())
         return
 
@@ -339,7 +338,8 @@ async def handle_text_food_clarification(
                 default_meal_type=default_meal_type,
             ),
         )
-        await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+        _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
+        await message.answer(_clar_body, reply_markup=_clar_kb)
         return
 
     if not result.items:
@@ -352,7 +352,7 @@ async def handle_text_food_clarification(
                 pending_food_result_draft=None,
                 pending_food=None,
             )
-            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX} {result.clarification_question}")
+            await message.answer(format_clarification_followup_prompt(result))
         else:
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
@@ -367,8 +367,6 @@ async def handle_text_food_clarification(
         clarification_mode=None,
     )
     reply = calorie_service.format_result(result)
-    if result.needs_clarification and result.clarification_question:
-        reply = f"{reply}\n\n⚠️ {result.clarification_question}"
     await message.answer(reply, reply_markup=photo_review_keyboard())
 
 
@@ -439,7 +437,8 @@ async def handle_draft_text_correction(
             photo_food_result=calorie_service.result_to_dict(updated),
             clarification_mode="photo",
         )
-        await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{updated.clarification_question}")
+        _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, updated)
+        await message.answer(_clar_body, reply_markup=_clar_kb)
         return
 
     await state.update_data(
@@ -447,8 +446,6 @@ async def handle_draft_text_correction(
         food_source=data.get("food_source", MealSource.TEXT_AI.value),
     )
     reply = calorie_service.format_result(updated)
-    if updated.needs_clarification and updated.clarification_question:
-        reply = f"{reply}\n\n⚠️ {updated.clarification_question}"
     await message.answer(reply, reply_markup=photo_review_keyboard())
 
 
@@ -518,7 +515,8 @@ async def handle_text_food(
                 default_meal_type=default_meal_type.value,
             ),
         )
-        await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+        _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
+        await message.answer(_clar_body, reply_markup=_clar_kb)
         return
 
     if not result.items:
@@ -531,7 +529,7 @@ async def handle_text_food(
                 pending_food_result_draft=None,
                 pending_food=None,
             )
-            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX} {result.clarification_question}")
+            await message.answer(format_clarification_followup_prompt(result))
         else:
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
@@ -547,6 +545,4 @@ async def handle_text_food(
         clarification_mode=None,
     )
     reply = calorie_service.format_result(result)
-    if result.needs_clarification and result.clarification_question:
-        reply = f"{reply}\n\n⚠️ {result.clarification_question}"
     await message.answer(reply, reply_markup=photo_review_keyboard())

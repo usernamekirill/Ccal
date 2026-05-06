@@ -67,8 +67,8 @@ def test_format_meal_review_skips_shallow_macro_total_mismatch_warning() -> None
     assert "расходятся" not in text
 
 
-def test_format_meal_review_warns_on_large_macro_total_mismatch() -> None:
-    """Without aligning totals, a clear gap triggers the banner (formatter-only check)."""
+def test_format_meal_review_hides_macro_total_mismatch_banner() -> None:
+    """Macro vs calorie gap is not shown to users (backend still validates elsewhere)."""
     r = FoodRecognitionResult(
         items=[
             FoodItemRecognition(
@@ -89,4 +89,5 @@ def test_format_meal_review_warns_on_large_macro_total_mismatch() -> None:
         comment="x",
     )
     text = ux_formatter.format_meal_review(r)
-    assert "расходятся" in text
+    assert "расходятся" not in text
+    assert "БЖУ всего" in text

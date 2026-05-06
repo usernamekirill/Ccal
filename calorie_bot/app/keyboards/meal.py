@@ -50,6 +50,20 @@ def today_meals_keyboard(meal_ids: list[int]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def portion_quick_pick_keyboard() -> InlineKeyboardMarkup:
+    """Quick portion presets for single-item weight clarification (AI follow-up, not regex)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="100 г · поменьше", callback_data="mpt:100"),
+                InlineKeyboardButton(text="150 г · средний", callback_data="mpt:150"),
+            ],
+            [InlineKeyboardButton(text="200 г · побольше", callback_data="mpt:200")],
+            [InlineKeyboardButton(text="✍️ Свой вариант", callback_data="mpt:x")],
+        ]
+    )
+
+
 def meal_type_keyboard(prefix: str = "food") -> InlineKeyboardMarkup:
     """Return keyboard for changing meal type."""
     return InlineKeyboardMarkup(

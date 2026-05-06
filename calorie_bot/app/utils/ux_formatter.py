@@ -1,9 +1,9 @@
 """Meal recognition card: totals, meal type, hints (item lines from nutrition_formatter)."""
 
+from calorie_bot.app.utils.food_emoji import food_line_emoji
 from calorie_bot.app.ai.schemas import FoodRecognitionResult
 from calorie_bot.app.domain import MealType
 from calorie_bot.app.services import portion_estimator
-from calorie_bot.app.utils.calories import calories_from_macros
 from calorie_bot.app.utils.nutrition_formatter import (
     format_item_block,
     meal_has_unknown_portion_items,
@@ -53,8 +53,10 @@ def format_meal_review(
         it = result.items[0]
         rng = portion_estimator.estimate_default_portion_grams(it.name)
         mid = (rng.grams_min + rng.grams_max) / 2
-        line2 = f"Укажите вес или подтвердите стандартную порцию (~{mid:.0f} г).\n\n"
-        intro = f"Я нашёл: {it.name}. " + line2
+        emoji = food_line_emoji(it.name)
+        title = (it.name or "").strip()
+        line2 = f"Сколько примерно было? Ориентир ~{mid:.0f} г ✍️\n\n"
+        intro = f"{emoji} {title}\n\n" + line2
 
     blocks = ["\n".join(format_item_block(item)) for item in result.items]
     body = intro + "\n\n".join(blocks)
@@ -72,19 +74,6 @@ def format_meal_review(
         p_tot, f_tot, c_tot = _meal_macro_totals_g(result.items)
         if p_tot > 0 or f_tot > 0 or c_tot > 0:
             lines.append(f"БЖУ всего: Б {p_tot:g} · Ж {f_tot:g} · У {c_tot:g} г")
-            atw_total = calories_from_macros(p_tot, f_tot, c_tot)
-            if (
-                result.total_calories > 0
-                and result.total_calories_min is None
-                and result.total_calories_max is None
-            ):
-                rel = abs(atw_total - result.total_calories) / float(result.total_calories)
-                # Avoid noisy warnings: rounding / fiber-alcohol spread; only flag clear mismatch.
-                if rel > 0.18 and result.total_calories >= 50:
-                    lines.append(
-                        f"⚠️ Сумма ккал ({result.total_calories}) и ккал из суммарного БЖУ "
-                        f"({atw_total}) заметно расходятся (~{rel * 100:.0f}%)."
-                    )
 
     mt = _meal_type_ru(result.meal_type)
     if mt:
@@ -92,12 +81,11 @@ def format_meal_review(
 
     if result.needs_portion_clarification and not (result.clarification_question or "").strip():
         lines.append(
-            "\nЯ понял блюдо, но не уверен в размере порции. "
-            "Напишите вес, например: 50 г.",
+            "\nРазмер порции можно уточнить — напиши вес, например 50 г ✍️",
         )
 
     if show_low_confidence_hint:
-        lines.append("\n⚠️ Оценка примерная — проверь порцию и размер.")
+        lines.append("\nЕсли порция другая — поправь вес, цифры подстроятся ✍️")
 
     out_text = "\n".join(lines)
     cq = (result.clarification_question or "").strip()

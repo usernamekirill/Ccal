@@ -6,6 +6,7 @@ from calorie_bot.app.config import Settings
 from calorie_bot.app.handlers import (
     errors,
     meal_confirmation,
+    meal_portion_pick,
     navigation,
     onboarding,
     photo,
@@ -52,5 +53,6 @@ def create_dispatcher(
     dispatcher.include_router(today.router)
     text_food.router.message.middleware(ai_rate)
     dispatcher.include_router(text_food.router)
+    dispatcher.include_router(meal_portion_pick.router)
     dispatcher.include_router(errors.router)
     return dispatcher

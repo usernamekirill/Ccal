@@ -25,7 +25,6 @@ from calorie_bot.app.messages.texts import (
     PHOTO_QUICK_ADD_TEXT,
     PHOTO_QUICK_DELETE_TEXT,
     RECOGNITION_UNCERTAIN_TEXT,
-    TEXT_FOOD_CLARIFICATION_PREFIX,
 )
 from calorie_bot.app.messages.ux_flow import MEAL_CANCEL_FOLLOWUP
 from calorie_bot.app.post_action_message import send_post_action_message
@@ -46,7 +45,7 @@ from calorie_bot.app.services.user_service import UserService
 from calorie_bot.app.services.user_settings_service import create_user_settings_service
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
-from calorie_bot.app.utils.image_processor import ImageProcessor
+from calorie_bot.app.utils.clarification_ux import format_blocking_clarification_message
 from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="photo")
@@ -146,7 +145,8 @@ async def handle_photo(
             food_source=MealSource.PHOTO.value,
             vision_baseline_snapshot=snap,
         )
-        await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+        clar_body, clar_kb = format_blocking_clarification_message(calorie_service, result)
+        await message.answer(clar_body, reply_markup=clar_kb)
         return
     snap = copy.deepcopy(calorie_service.result_to_dict(result))
     await state.set_state(MealStates.photo_review)
@@ -368,7 +368,8 @@ async def apply_photo_edit(
                     photo_edit_action=None,
                     pending_food_result_draft=None,
                 )
-                await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{updated.clarification_question}")
+                clar_body, clar_kb = format_blocking_clarification_message(service, updated)
+                await message.answer(clar_body, reply_markup=clar_kb)
                 return
             if not updated.items:
                 await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
@@ -390,8 +391,6 @@ async def apply_photo_edit(
         photo_edit_action=None,
     )
     reply = service.format_result(updated)
-    if updated.needs_clarification and updated.clarification_question:
-        reply = f"{reply}\n\n⚠️ {updated.clarification_question}"
     await message.answer(reply, reply_markup=photo_review_keyboard())
 
 

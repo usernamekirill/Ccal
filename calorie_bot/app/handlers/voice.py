@@ -16,7 +16,6 @@ from calorie_bot.app.keyboards.confirmation import recognition_trouble_keyboard
 from calorie_bot.app.keyboards.meal import photo_review_keyboard
 from calorie_bot.app.messages.texts import (
     RECOGNITION_UNCERTAIN_TEXT,
-    TEXT_FOOD_CLARIFICATION_PREFIX,
     TEXT_FOOD_PROCESSING_TEXT,
 )
 from calorie_bot.app.security.input_validation import ensure_audio_duration, ensure_meal_text_length
@@ -29,6 +28,10 @@ from calorie_bot.app.services.user_settings_service import create_user_settings_
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
 from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
+from calorie_bot.app.utils.clarification_ux import (
+    format_blocking_clarification_message,
+    format_clarification_followup_prompt,
+)
 from calorie_bot.app.utils.draft_parse_context import (
     meal_parse_context,
     unresolved_clarifications_from_recognition,
@@ -132,7 +135,8 @@ async def handle_voice_or_audio(
                     voice_transcript=transcript,
                 ),
             )
-            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+            _cl, _kb = format_blocking_clarification_message(calorie_service, result)
+            await message.answer(_cl, reply_markup=_kb)
             return
         if not result.items:
             if result.needs_clarification and result.clarification_question:
@@ -145,7 +149,7 @@ async def handle_voice_or_audio(
                     pending_food=None,
                     voice_transcript=transcript,
                 )
-                await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX} {result.clarification_question}")
+                await message.answer(format_clarification_followup_prompt(result))
             else:
                 await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
             return
@@ -160,8 +164,6 @@ async def handle_voice_or_audio(
             voice_transcript=transcript,
         )
         body = calorie_service.format_result(result)
-        if result.needs_clarification and result.clarification_question:
-            body = f"{body}\n\n⚠️ {result.clarification_question}"
         await message.answer(
             f"Учёл: «{transcript}»\n\n{body}",
             reply_markup=photo_review_keyboard(),
@@ -208,7 +210,8 @@ async def handle_voice_or_audio(
                 clarification_mode="photo",
                 voice_transcript=transcript,
             )
-            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{updated.clarification_question}")
+            _c, _kb = format_blocking_clarification_message(calorie_service, updated)
+            await message.answer(_c, reply_markup=_kb)
             return
         await state.set_state(MealStates.photo_review)
         await state.update_data(
@@ -218,8 +221,6 @@ async def handle_voice_or_audio(
             photo_edit_action=None,
         )
         body = calorie_service.format_result(updated)
-        if updated.needs_clarification and updated.clarification_question:
-            body = f"{body}\n\n⚠️ {updated.clarification_question}"
         await message.answer(
             f"Учёл: «{transcript}»\n\n{body}",
             reply_markup=photo_review_keyboard(),
@@ -264,7 +265,8 @@ async def handle_voice_or_audio(
                 voice_transcript=transcript,
             ),
         )
-        await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+        _cl, _kb = format_blocking_clarification_message(calorie_service, result)
+        await message.answer(_cl, reply_markup=_kb)
         return
 
     if not result.items:
@@ -277,7 +279,7 @@ async def handle_voice_or_audio(
                 pending_food_result_draft=None,
                 pending_food=None,
             )
-            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX} {result.clarification_question}")
+            await message.answer(format_clarification_followup_prompt(result))
         else:
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
@@ -294,8 +296,6 @@ async def handle_voice_or_audio(
         pending_food=None,
     )
     body = calorie_service.format_result(result)
-    if result.needs_clarification and result.clarification_question:
-        body = f"{body}\n\n⚠️ {result.clarification_question}"
     await message.answer(
         f"Распознал: {transcript}\n\n{body}",
         reply_markup=photo_review_keyboard(),
