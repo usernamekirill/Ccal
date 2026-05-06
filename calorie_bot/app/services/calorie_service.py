@@ -970,10 +970,16 @@ class CalorieService:
 
     def format_result(self, result: FoodRecognitionResult) -> str:
         """Return a user-facing recognition summary."""
+        from calorie_bot.app.ai.clarification_orchestrator import (
+            should_omit_clarification_footer_in_review,
+        )
+
         result = self.validate_food_result(result)
+        omit_tail = should_omit_clarification_footer_in_review(result, self)
         return ux_formatter.format_meal_review(
             result,
-            show_low_confidence_hint=self.is_low_confidence(result),
+            show_low_confidence_hint=self.is_low_confidence(result) and not omit_tail,
+            omit_appended_clarification=omit_tail,
         )
 
     def is_low_confidence(self, result: FoodRecognitionResult) -> bool:
@@ -1006,7 +1012,10 @@ class CalorieService:
         return False
 
     def apply_clarification_guards(self, result: FoodRecognitionResult) -> FoodRecognitionResult:
-        """Append rule-based clarification prompts; set ``needs_clarification`` when needed."""
+        """Set clarification flags without concatenating validator dumps into ``clarification_question``.
+
+        User-facing copy is produced by the clarification orchestrator + AI (one action per turn).
+        """
         if not result.items:
             q = (result.clarification_question or "").strip()
             if result.needs_clarification and q:
@@ -1014,15 +1023,9 @@ class CalorieService:
             return result.model_copy(
                 update={
                     "needs_clarification": True,
-                    "clarification_question": (
-                        "Не смог точно определить продукты. Уточните блюдо и граммы "
-                        "(например «макароны 200 г и твёрдый сыр 30 г»), "
-                        "или добавьте калории вручную (например «…, 350 ккал»)."
-                    ),
+                    "clarification_question": None,
                 }
             )
-        extras: list[str] = []
-        prev_q = (result.clarification_question or "").strip().lower()
 
         user_like_grams = (
             GramsSource.USER.value,
@@ -1035,61 +1038,66 @@ class CalorieService:
             and (it.grams_source in user_like_grams)
             for it in result.items
         )
-        if (
-            self.is_low_confidence(result)
-            and not all_have_pinned_mass
-            and "неточн" not in prev_q
-            and "уверен" not in prev_q
-        ):
-            extras.append("Оценка неточная — уточните состав или вес в граммах.")
 
+        needs = False
         for it in result.items:
+            if not has_quantified_portion_mass(it.estimated_grams, it.grams_min, it.grams_max):
+                needs = True
+                break
             if self._ambiguous_name_requires_detail(it):
-                extras.append(
-                    f"Уточните «{it.name}»: вес и вид продукта "
-                    f"(например «пармезан 50 г» или «макароны 200 г и твёрдый сыр 30 г»)."
-                )
-            elif it.needs_portion_clarification:
-                if it.name.lower() in prev_q:
-                    continue
-                needle = f"«{it.name}»"
-                if needle.lower() not in prev_q:
-                    extras.append(
-                        f"Укажите вес или количество для «{it.name}» (например 150 г или 2 шт.)."
-                    )
+                needs = True
+                break
 
-        if not extras:
-            return result
+        prior_q = (result.clarification_question or "").strip()
+        if prior_q and not needs:
+            needs = True
+        if not needs and self.is_low_confidence(result) and not all_have_pinned_mass:
+            needs = True
 
-        deduped: list[str] = []
-        seen: set[str] = set()
-        for line in extras:
-            low = line.lower()
-            if low not in seen:
-                seen.add(low)
-                deduped.append(line)
+        # Drop stacked validator bullets; orchestrator replaces copy. Keep short single-line LLM hints only.
+        clean_hint = None
+        if prior_q and "\n•" not in prior_q and "\n-" not in prior_q and len(prior_q) < 320:
+            clean_hint = prior_q
 
-        block = "\n".join(f"• {e}" for e in deduped)
-        prior = (result.clarification_question or "").strip()
-        new_q = f"{prior}\n{block}".strip() if prior else block
-        new_q = new_q[:_MAX_CLARIFICATION_CHARS]
-        return result.model_copy(update={"needs_clarification": True, "clarification_question": new_q})
+        return result.model_copy(
+            update={
+                "needs_clarification": needs,
+                "clarification_question": clean_hint if needs else None,
+            }
+        )
+
+    def _must_clarify_before_preview(self, result: FoodRecognitionResult) -> bool:
+        """True when the meal card would be misleading without a user reply first."""
+        if not result.items:
+            return True
+        for it in result.items:
+            if not has_quantified_portion_mass(it.estimated_grams, it.grams_min, it.grams_max):
+                return True
+            if self._ambiguous_name_requires_detail(it):
+                return True
+        return self.is_low_confidence(result)
 
     def requires_blocking_clarification(self, result: FoodRecognitionResult) -> bool:
         """True when the user should answer follow-up questions before the preview step."""
-        q = (result.clarification_question or "").strip()
-        return bool(result.needs_clarification and q)
+        if not result.needs_clarification:
+            return False
+        if (result.clarification_question or "").strip():
+            return True
+        return self._must_clarify_before_preview(result)
 
     def is_portion_weight_blocking_only(self, result: FoodRecognitionResult) -> bool:
-        """Single-item draft blocked only because mass/portion is unknown (not e.g. type of cheese)."""
+        """Draft blocked only because mass/portion is unknown (no ambiguous product rows)."""
         if not self.requires_blocking_clarification(result):
             return False
-        if len(result.items) != 1:
+        if not result.items:
             return False
-        it = result.items[0]
-        if has_quantified_portion_mass(it.estimated_grams, it.grams_min, it.grams_max):
-            return False
-        return True
+        for it in result.items:
+            if self._ambiguous_name_requires_detail(it):
+                return False
+        return all(
+            not has_quantified_portion_mass(it.estimated_grams, it.grams_min, it.grams_max)
+            for it in result.items
+        )
 
     async def apply_user_loose_weight_reply(
         self,

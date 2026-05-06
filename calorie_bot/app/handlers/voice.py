@@ -29,7 +29,7 @@ from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
 from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
 from calorie_bot.app.utils.clarification_ux import (
-    format_blocking_clarification_message,
+    build_blocking_clarification_ui,
     format_clarification_followup_prompt,
 )
 from calorie_bot.app.utils.draft_parse_context import (
@@ -120,6 +120,9 @@ async def handle_voice_or_audio(
             return
         result = calorie_service.apply_clarification_guards(result)
         if calorie_service.requires_blocking_clarification(result):
+            _cl, _kb, result = await build_blocking_clarification_ui(
+                calorie_service=calorie_service, result=result, settings=settings
+            )
             next_state = (
                 MealStates.waiting_for_weight
                 if calorie_service.is_portion_weight_blocking_only(result)
@@ -135,7 +138,6 @@ async def handle_voice_or_audio(
                     voice_transcript=transcript,
                 ),
             )
-            _cl, _kb = format_blocking_clarification_message(calorie_service, result)
             await message.answer(_cl, reply_markup=_kb)
             return
         if not result.items:
@@ -204,13 +206,17 @@ async def handle_voice_or_audio(
             return
         updated = calorie_service.apply_clarification_guards(updated)
         if calorie_service.requires_blocking_clarification(updated):
+            _c, _kb, updated = await build_blocking_clarification_ui(
+                calorie_service=calorie_service,
+                result=updated,
+                settings=settings,
+            )
             await state.set_state(MealStates.waiting_for_correction)
             await state.update_data(
                 photo_food_result=calorie_service.result_to_dict(updated),
                 clarification_mode="photo",
                 voice_transcript=transcript,
             )
-            _c, _kb = format_blocking_clarification_message(calorie_service, updated)
             await message.answer(_c, reply_markup=_kb)
             return
         await state.set_state(MealStates.photo_review)
@@ -250,6 +256,9 @@ async def handle_voice_or_audio(
 
     result = calorie_service.apply_clarification_guards(result)
     if calorie_service.requires_blocking_clarification(result):
+        _cl, _kb, result = await build_blocking_clarification_ui(
+            calorie_service=calorie_service, result=result, settings=settings
+        )
         next_state = (
             MealStates.waiting_for_weight
             if calorie_service.is_portion_weight_blocking_only(result)
@@ -265,7 +274,6 @@ async def handle_voice_or_audio(
                 voice_transcript=transcript,
             ),
         )
-        _cl, _kb = format_blocking_clarification_message(calorie_service, result)
         await message.answer(_cl, reply_markup=_kb)
         return
 

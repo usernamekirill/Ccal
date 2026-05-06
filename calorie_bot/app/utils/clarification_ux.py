@@ -1,4 +1,4 @@
-"""Conversational clarification copy and FSM helpers for meal flows."""
+"""Conversational clarification copy, FSM helpers, and AI-orchestrated blocking UI."""
 
 from __future__ import annotations
 
@@ -6,34 +6,23 @@ from typing import Any
 
 from aiogram.types import InlineKeyboardMarkup
 
+from calorie_bot.app.ai.clarification_orchestrator import build_llm_context
+from calorie_bot.app.ai.clarification_reply_service import ClarificationReplyService
 from calorie_bot.app.ai.schemas import FoodRecognitionResult
-from calorie_bot.app.keyboards.meal import portion_quick_pick_keyboard
+from calorie_bot.app.config import Settings
 from calorie_bot.app.services.calorie_service import CalorieService
 from calorie_bot.app.states.meal import MealStates
-from calorie_bot.app.utils.food_emoji import food_line_emoji
 
 
-def format_blocking_clarification_message(
+async def build_blocking_clarification_ui(
+    *,
     calorie_service: CalorieService,
     result: FoodRecognitionResult,
-) -> tuple[str, InlineKeyboardMarkup | None]:
-    """Build human-friendly blocking clarification text and optional portion keyboard."""
-    q = (result.clarification_question or "").strip()
-    if calorie_service.is_portion_weight_blocking_only(result):
-        it = result.items[0]
-        title = (it.name or "Блюдо").strip()
-        emoji = food_line_emoji(title)
-        lines = [
-            f"{emoji} {title}",
-            "",
-            "Сколько примерно было?",
-            "",
-            "Можно выбрать вариант ниже или написать свой вес ✍️",
-        ]
-        return ("\n".join(lines), portion_quick_pick_keyboard())
-    lead = "Давай уточним — так посчитаю точнее 👇"
-    body = f"{lead}\n\n{q}" if q else lead
-    return (body, None)
+    settings: Settings,
+) -> tuple[str, InlineKeyboardMarkup | None, FoodRecognitionResult]:
+    """One conversational clarification turn (AI + contextual quick actions, single stored question)."""
+    ctx = build_llm_context(result, calorie_service)
+    return await ClarificationReplyService(settings).build_reply_for_result(result, ctx)
 
 
 def format_clarification_followup_prompt(result: FoodRecognitionResult) -> str:

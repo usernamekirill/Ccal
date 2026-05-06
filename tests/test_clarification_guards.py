@@ -31,8 +31,8 @@ def test_guard_triggers_on_ambiguous_cheese_with_default_portion() -> None:
     out = svc.validate_food_result(r)
     guarded = svc.apply_clarification_guards(out)
     assert guarded.needs_clarification is True
-    assert guarded.clarification_question
-    assert "Сыр" in guarded.clarification_question or "сыр" in guarded.clarification_question.lower()
+    q = (guarded.clarification_question or "").strip()
+    assert not q or "\n•" not in q
 
 
 def test_guard_skips_when_user_gave_grams() -> None:
@@ -64,8 +64,8 @@ def test_guard_skips_when_user_gave_grams() -> None:
     assert not (guarded.clarification_question or "").strip()
 
 
-def test_guard_empty_items_sets_blocking_question() -> None:
-    """Empty parse must not fall through silent; user gets a clarification (spec: no silent miss)."""
+def test_guard_empty_items_sets_needs_clarification_for_orchestrator() -> None:
+    """Empty parse must not fall through silent; copy is filled by clarification UI, not guards."""
     svc = CalorieService()
     r = FoodRecognitionResult(
         items=[],
@@ -76,5 +76,4 @@ def test_guard_empty_items_sets_blocking_question() -> None:
     out = svc.validate_food_result(r)
     guarded = svc.apply_clarification_guards(out)
     assert guarded.needs_clarification is True
-    assert guarded.clarification_question
-    assert "грамм" in guarded.clarification_question.lower() or "калор" in guarded.clarification_question.lower()
+    assert guarded.clarification_question is None

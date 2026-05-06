@@ -45,7 +45,7 @@ from calorie_bot.app.services.user_service import UserService
 from calorie_bot.app.services.user_settings_service import create_user_settings_service
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
-from calorie_bot.app.utils.clarification_ux import format_blocking_clarification_message
+from calorie_bot.app.utils.clarification_ux import build_blocking_clarification_ui
 from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="photo")
@@ -131,6 +131,11 @@ async def handle_photo(
         )
     result = calorie_service.apply_clarification_guards(result)
     if calorie_service.requires_blocking_clarification(result):
+        clar_body, clar_kb, result = await build_blocking_clarification_ui(
+            calorie_service=calorie_service,
+            result=result,
+            settings=settings,
+        )
         await state.set_state(MealStates.waiting_for_correction)
         tz = ZoneInfo(settings.timezone)
         default_mt = infer_meal_type(datetime.now(tz))
@@ -145,7 +150,6 @@ async def handle_photo(
             food_source=MealSource.PHOTO.value,
             vision_baseline_snapshot=snap,
         )
-        clar_body, clar_kb = format_blocking_clarification_message(calorie_service, result)
         await message.answer(clar_body, reply_markup=clar_kb)
         return
     snap = copy.deepcopy(calorie_service.result_to_dict(result))
@@ -361,6 +365,11 @@ async def apply_photo_edit(
             )
             updated = service.apply_clarification_guards(updated)
             if service.requires_blocking_clarification(updated):
+                clar_body, clar_kb, updated = await build_blocking_clarification_ui(
+                    calorie_service=service,
+                    result=updated,
+                    settings=settings,
+                )
                 await state.set_state(MealStates.waiting_for_correction)
                 await state.update_data(
                     photo_food_result=service.result_to_dict(updated),
@@ -368,7 +377,6 @@ async def apply_photo_edit(
                     photo_edit_action=None,
                     pending_food_result_draft=None,
                 )
-                clar_body, clar_kb = format_blocking_clarification_message(service, updated)
                 await message.answer(clar_body, reply_markup=clar_kb)
                 return
             if not updated.items:

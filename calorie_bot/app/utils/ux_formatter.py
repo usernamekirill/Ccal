@@ -42,6 +42,7 @@ def format_meal_review(
     result: FoodRecognitionResult,
     *,
     show_low_confidence_hint: bool = False,
+    omit_appended_clarification: bool = False,
 ) -> str:
     """Confirmation card with honest grams/calories (point, range, or clarify)."""
     intro = ""
@@ -89,7 +90,11 @@ def format_meal_review(
 
     out_text = "\n".join(lines)
     cq = (result.clarification_question or "").strip()
-    if cq and cq.lower() not in out_text.lower():
+    if (
+        cq
+        and cq.lower() not in out_text.lower()
+        and not omit_appended_clarification
+    ):
         out_text = f"{out_text}\n\n{cq}"
     return out_text
 

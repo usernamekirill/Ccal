@@ -130,8 +130,6 @@ def test_salad_ambiguous_triggers_clarification_guard() -> None:
     base = svc.validate_food_result(_result(items=[row]))
     guarded = svc.apply_clarification_guards(base)
     assert guarded.needs_clarification is True
-    assert guarded.clarification_question
-    # Не должны быть «жёстко уверенные» уровни у самого item при generic name + weak signals
     assert guarded.items[0].food_confidence <= 0.95
 
 

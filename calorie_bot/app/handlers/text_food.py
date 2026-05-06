@@ -27,7 +27,7 @@ from calorie_bot.app.states.settings import SettingsStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
 from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
 from calorie_bot.app.utils.clarification_ux import (
-    format_blocking_clarification_message,
+    build_blocking_clarification_ui,
     format_clarification_followup_prompt,
 )
 from calorie_bot.app.utils.draft_parse_context import (
@@ -104,6 +104,11 @@ async def handle_waiting_for_weight(
 
     result = calorie_service.apply_clarification_guards(result)
     if calorie_service.requires_blocking_clarification(result):
+        _clar_body, _clar_kb, result = await build_blocking_clarification_ui(
+            calorie_service=calorie_service,
+            result=result,
+            settings=settings,
+        )
         next_state = (
             MealStates.waiting_for_weight
             if calorie_service.is_portion_weight_blocking_only(result)
@@ -118,7 +123,6 @@ async def handle_waiting_for_weight(
                 default_meal_type=default_meal_type,
             ),
         )
-        _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
         await message.answer(_clar_body, reply_markup=_clar_kb)
         return
 
@@ -204,8 +208,12 @@ async def handle_text_food_clarification(
             return
         updated = calorie_service.apply_clarification_guards(updated)
         if calorie_service.requires_blocking_clarification(updated):
+            _clar_body, _clar_kb, updated = await build_blocking_clarification_ui(
+                calorie_service=calorie_service,
+                result=updated,
+                settings=settings,
+            )
             await state.update_data(photo_food_result=calorie_service.result_to_dict(updated))
-            _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, updated)
             await message.answer(_clar_body, reply_markup=_clar_kb)
             return
         await state.set_state(MealStates.photo_review)
@@ -254,6 +262,11 @@ async def handle_text_food_clarification(
 
         result = calorie_service.apply_clarification_guards(result)
         if calorie_service.requires_blocking_clarification(result):
+            _clar_body, _clar_kb, result = await build_blocking_clarification_ui(
+                calorie_service=calorie_service,
+                result=result,
+                settings=settings,
+            )
             next_state = (
                 MealStates.waiting_for_weight
                 if calorie_service.is_portion_weight_blocking_only(result)
@@ -273,7 +286,6 @@ async def handle_text_food_clarification(
                 clarification_mode="text_draft",
                 pending_food=pf,
             )
-            _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
             await message.answer(_clar_body, reply_markup=_clar_kb)
             return
         if not result.items:
@@ -323,6 +335,11 @@ async def handle_text_food_clarification(
 
     result = calorie_service.apply_clarification_guards(result)
     if calorie_service.requires_blocking_clarification(result):
+        _clar_body, _clar_kb, result = await build_blocking_clarification_ui(
+            calorie_service=calorie_service,
+            result=result,
+            settings=settings,
+        )
         next_state = (
             MealStates.waiting_for_weight
             if calorie_service.is_portion_weight_blocking_only(result)
@@ -339,7 +356,6 @@ async def handle_text_food_clarification(
                 default_meal_type=default_meal_type,
             ),
         )
-        _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
         await message.answer(_clar_body, reply_markup=_clar_kb)
         return
 
@@ -433,12 +449,16 @@ async def handle_draft_text_correction(
 
     updated = calorie_service.apply_clarification_guards(updated)
     if calorie_service.requires_blocking_clarification(updated):
+        _clar_body, _clar_kb, updated = await build_blocking_clarification_ui(
+            calorie_service=calorie_service,
+            result=updated,
+            settings=settings,
+        )
         await state.set_state(MealStates.waiting_for_correction)
         await state.update_data(
             photo_food_result=calorie_service.result_to_dict(updated),
             clarification_mode="photo",
         )
-        _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, updated)
         await message.answer(_clar_body, reply_markup=_clar_kb)
         return
 
@@ -491,6 +511,11 @@ async def handle_text_food(
         )
         result = calorie_service.apply_clarification_guards(result)
         if calorie_service.requires_blocking_clarification(result):
+            _clar_body, _clar_kb, result = await build_blocking_clarification_ui(
+                calorie_service=calorie_service,
+                result=result,
+                settings=settings,
+            )
             next_state = (
                 MealStates.waiting_for_weight
                 if calorie_service.is_portion_weight_blocking_only(result)
@@ -505,7 +530,6 @@ async def handle_text_food(
                     default_meal_type=default_meal_type.value,
                 ),
             )
-            _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
             await message.answer(_clar_body, reply_markup=_clar_kb)
             return
 

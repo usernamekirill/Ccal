@@ -27,7 +27,7 @@ from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
 from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
 from calorie_bot.app.utils.clarification_ux import (
-    format_blocking_clarification_message,
+    build_blocking_clarification_ui,
     format_clarification_followup_prompt,
     resolve_draft_for_portion_quick_pick,
 )
@@ -129,8 +129,12 @@ async def handle_portion_quick_pick(
             return
         updated = calorie_service.apply_clarification_guards(updated)
         if calorie_service.requires_blocking_clarification(updated):
+            clar_body, clar_kb, updated = await build_blocking_clarification_ui(
+                calorie_service=calorie_service,
+                result=updated,
+                settings=settings,
+            )
             await state.update_data(photo_food_result=calorie_service.result_to_dict(updated))
-            clar_body, clar_kb = format_blocking_clarification_message(calorie_service, updated)
             await callback.message.answer(clar_body, reply_markup=clar_kb)
             return
         if not updated.items:
@@ -192,6 +196,11 @@ async def handle_portion_quick_pick(
         return
     result = calorie_service.apply_clarification_guards(result)
     if calorie_service.requires_blocking_clarification(result):
+        clar_body, clar_kb, result = await build_blocking_clarification_ui(
+            calorie_service=calorie_service,
+            result=result,
+            settings=settings,
+        )
         next_state = (
             MealStates.waiting_for_weight
             if calorie_service.is_portion_weight_blocking_only(result)
@@ -206,7 +215,6 @@ async def handle_portion_quick_pick(
                 default_meal_type=default_meal_type,
             ),
         )
-        clar_body, clar_kb = format_blocking_clarification_message(calorie_service, result)
         await callback.message.answer(clar_body, reply_markup=clar_kb)
         return
     if not result.items:

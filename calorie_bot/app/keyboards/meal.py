@@ -52,16 +52,28 @@ def today_meals_keyboard(meal_ids: list[int]) -> InlineKeyboardMarkup:
 
 def portion_quick_pick_keyboard() -> InlineKeyboardMarkup:
     """Quick portion presets for single-item weight clarification (AI follow-up, not regex)."""
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="100 г · поменьше", callback_data="mpt:100"),
-                InlineKeyboardButton(text="150 г · средний", callback_data="mpt:150"),
-            ],
-            [InlineKeyboardButton(text="200 г · побольше", callback_data="mpt:200")],
-            [InlineKeyboardButton(text="✍️ Свой вариант", callback_data="mpt:x")],
-        ]
-    )
+    return contextual_portion_keyboard([(100, "поменьше"), (150, "средняя"), (200, "побольше")])
+
+
+def contextual_portion_keyboard(presets: list[tuple[int, str]]) -> InlineKeyboardMarkup:
+    """Build gram quick-pick rows; callback_data ``mpt:<grams>`` (compatible with meal_portion_pick)."""
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for grams, label in presets[:5]:
+        safe_label = (label or "").strip()[:32] or "вариант"
+        row.append(
+            InlineKeyboardButton(
+                text=f"{grams} г · {safe_label}",
+                callback_data=f"mpt:{int(grams)}",
+            ),
+        )
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([InlineKeyboardButton(text="✍️ Свой вариант", callback_data="mpt:x")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def meal_type_keyboard(prefix: str = "food") -> InlineKeyboardMarkup:
