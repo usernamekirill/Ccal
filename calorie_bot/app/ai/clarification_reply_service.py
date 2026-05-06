@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 from calorie_bot.app.ai.clarification_orchestrator import (
     ClarificationLLMContext,
     fallback_clarification_body,
-    portion_presets_for_dish,
+    missing_weight_portion_actions,
+    multi_item_missing_weight_clarification_body,
 )
 from calorie_bot.app.ai.prompts import CLARIFICATION_ASSISTANT_SYSTEM_PROMPT
 from calorie_bot.app.ai.schemas import FoodRecognitionResult
@@ -89,11 +90,22 @@ class ClarificationReplyService:
     ) -> tuple[str, object | None, FoodRecognitionResult]:
         """Produce UI line + keyboard + result with a single stored clarification_question."""
         try:
-            message, payload = await self.generate_card(ctx)
-            actions = [(a.grams, a.label) for a in payload.quick_actions]
-            if ctx.primary_issue == "missing_weight" and len(actions) < 2:
-                actions = portion_presets_for_dish(ctx.dish_line)
-            kb = contextual_portion_keyboard(actions) if ctx.primary_issue == "missing_weight" else None
+            message, _payload = await self.generate_card(ctx)
+            multi = multi_item_missing_weight_clarification_body(ctx)
+            if ctx.primary_issue == "missing_weight" and multi:
+                message = multi
+            actions = (
+                missing_weight_portion_actions(result) if ctx.primary_issue == "missing_weight" else []
+            )
+            single_item = len(result.items) == 1
+            kb = (
+                contextual_portion_keyboard(
+                    actions,
+                    single_ingredient_clarification=single_item,
+                )
+                if actions
+                else None
+            )
             merged = result.model_copy(
                 update={
                     "clarification_question": message,
@@ -105,11 +117,17 @@ class ClarificationReplyService:
             _log.warning("clarification_ai_fallback", extra={"issue": ctx.primary_issue})
             body = fallback_clarification_body(ctx)
             actions = (
-                portion_presets_for_dish(ctx.dish_line)
-                if ctx.primary_issue == "missing_weight"
-                else []
+                missing_weight_portion_actions(result) if ctx.primary_issue == "missing_weight" else []
             )
-            kb = contextual_portion_keyboard(actions) if actions else None
+            single_item = len(result.items) == 1
+            kb = (
+                contextual_portion_keyboard(
+                    actions,
+                    single_ingredient_clarification=single_item,
+                )
+                if actions
+                else None
+            )
             merged = result.model_copy(
                 update={
                     "clarification_question": body,

@@ -15,7 +15,14 @@ from calorie_bot.app.ai.text_parser_service import FoodTextParserService
 from calorie_bot.app.config import Settings
 from calorie_bot.app.domain import MealSource
 from calorie_bot.app.keyboards.confirmation import recognition_trouble_keyboard
-from calorie_bot.app.keyboards.meal import photo_review_keyboard
+from calorie_bot.app.keyboards.meal import (
+    PORTION_CUSTOM_FREE_TEXT_HINT,
+    PortionQuickPickParsed,
+    parse_clarify_weight_payload,
+    parse_portion_quick_pick_payload,
+    photo_review_keyboard,
+    portion_pick_synthetic_user_text,
+)
 from calorie_bot.app.messages.texts import RECOGNITION_UNCERTAIN_TEXT, TEXT_FOOD_PROCESSING_TEXT
 from calorie_bot.app.security.input_validation import ensure_meal_text_length
 from calorie_bot.app.services.calorie_service import CalorieService
@@ -41,21 +48,22 @@ router = Router(name="meal_portion_pick")
 _log = logging.getLogger(__name__)
 
 
-@router.callback_query(F.data.startswith("mpt:"))
-async def handle_portion_quick_pick(
+async def _send_custom_portion_free_text_hint(callback: CallbackQuery) -> None:
+    await callback.answer()
+    if callback.message is not None:
+        await callback.message.answer(PORTION_CUSTOM_FREE_TEXT_HINT)
+
+
+async def _run_portion_gram_pick_flow(
     callback: CallbackQuery,
     state: FSMContext,
     session: AsyncSession,
     settings: Settings,
+    parsed: PortionQuickPickParsed,
 ) -> None:
-    """Apply a preset gram amount via AI with the same context as a typed weight reply."""
-    if callback.data is None or callback.from_user is None:
+    """Apply a gram preset via text-food parser + current draft (photo or text clarification)."""
+    if callback.from_user is None or callback.message is None:
         return
-    raw = callback.data.split(":", 1)[1]
-    if raw == "x":
-        await callback.answer("Напиши вес одним сообщением — например 120 г", show_alert=False)
-        return
-    user_text = f"{raw} г"
 
     user_row = await UserService(session).ensure_user(callback.from_user)
     blocked = food_logging_blocked_message(user_row)
@@ -70,24 +78,30 @@ async def handle_portion_quick_pick(
     data = await state.get_data()
     st = await state.get_state()
     mode, draft_dict = resolve_draft_for_portion_quick_pick(data, st)
-    if not mode or not draft_dict or callback.message is None:
+    if not mode or not draft_dict:
         await callback.answer(
             "Сначала отправь описание еды — черновик не найден.",
             show_alert=True,
         )
         return
 
-    ensure_meal_text_length(user_text.strip(), settings.max_meal_text_chars)
+    calorie_service = CalorieService()
+    pending_fr = calorie_service.result_from_dict(draft_dict)
+    try:
+        user_text = portion_pick_synthetic_user_text(pending_fr, parsed).strip()
+    except ValueError:
+        await callback.answer("Черновик устарел — отправьте приём пищи заново.", show_alert=True)
+        return
+
+    ensure_meal_text_length(user_text, settings.max_meal_text_chars)
     await callback.answer()
 
-    calorie_service = CalorieService()
     _dmt = data.get("default_meal_type")
     default_meal_type = (
         str(_dmt).strip()
         if _dmt is not None and str(_dmt).strip()
         else infer_meal_type(datetime.now(ZoneInfo(settings.timezone))).value
     )
-    pending_fr = calorie_service.result_from_dict(draft_dict)
     unresolved = unresolved_clarifications_from_recognition(pending_fr)
 
     if mode == "photo":
@@ -165,7 +179,7 @@ async def handle_portion_quick_pick(
             default_meal_type=default_meal_type,
             context=meal_parse_context(
                 data,
-                current_draft=draft_dict,
+                current_draft=pending_fr,
                 unresolved_clarifications=unresolved,
             ),
         )
@@ -247,3 +261,47 @@ async def handle_portion_quick_pick(
         calorie_service.format_result(result),
         reply_markup=photo_review_keyboard(),
     )
+
+
+@router.callback_query(F.data.startswith("mpt:"))
+async def handle_portion_quick_pick(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    """Legacy ``mpt:`` quick-picks (single-product presets)."""
+    if callback.data is None or callback.from_user is None:
+        return
+    raw = callback.data.split(":", 1)[1]
+    try:
+        parsed = parse_portion_quick_pick_payload(raw)
+    except ValueError:
+        await callback.answer("Не удалось разобрать кнопку. Попробуйте ещё раз.", show_alert=True)
+        return
+    if parsed.kind == "custom":
+        await _send_custom_portion_free_text_hint(callback)
+        return
+    await _run_portion_gram_pick_flow(callback, state, session, settings, parsed)
+
+
+@router.callback_query(F.data.startswith("clarify_weight:"))
+async def handle_clarify_weight_pick(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+) -> None:
+    """Item-scoped gram presets (composite dishes)."""
+    if callback.data is None or callback.from_user is None:
+        return
+    raw = callback.data.split(":", 1)[1]
+    try:
+        parsed = parse_clarify_weight_payload(raw)
+    except ValueError:
+        await callback.answer("Не удалось разобрать кнопку. Попробуйте ещё раз.", show_alert=True)
+        return
+    if parsed.kind == "custom":
+        await _send_custom_portion_free_text_hint(callback)
+        return
+    await _run_portion_gram_pick_flow(callback, state, session, settings, parsed)

@@ -41,18 +41,37 @@ _MEAT = ("куриц", "индейк", "говядин", "свинин", "рыб
 
 def portion_presets_for_dish(dish_line: str) -> list[tuple[int, str]]:
     """Typical gram presets + short Russian labels (contextual, not generic cheese/pasta examples)."""
-    low = dish_line.lower()
+    raw = (dish_line or "").strip()
+    low = raw.lower()
+    ne = low.replace("ё", "е")
+    if ne == "мед":
+        return [(20, ""), (30, ""), (40, "")]
     if any(k in low for k in _DAIRY):
         return [(150, "небольшая порция"), (200, "средняя"), (300, "большая")]
     if any(k in low for k in _SOUP):
         return [(250, "чаша"), (330, "средняя"), (400, "большая")]
     if any(k in low for k in _CAKE):
-        return [(80, "тонкий кусок"), (120, "средний"), (180, "щедрый")]
+        return [(100, "тонкий кусок"), (150, "средний"), (200, "щедрый")]
     if any(k in low for k in _PASTA):
         return [(200, "поменьше"), (250, "норма"), (330, "с голоду")]
     if any(k in low for k in _MEAT):
         return [(120, "поменьше"), (180, "средняя порция"), (250, "побольше")]
     return [(100, "поменьше"), (150, "средняя"), (200, "побольше")]
+
+
+def missing_weight_portion_actions(
+    result: FoodRecognitionResult,
+) -> list[tuple[int | None, int, str]]:
+    """Build preset rows: (item_index, grams, product_name); two gram options per underweighted line."""
+    out: list[tuple[int | None, int, str]] = []
+    for idx, it in enumerate(result.items):
+        if has_quantified_portion_mass(it.estimated_grams, it.grams_min, it.grams_max):
+            continue
+        name = (it.name or "").strip() or "Позиция"
+        n_presets = 3 if len(result.items) == 1 else 2
+        for grams, _desc in portion_presets_for_dish(name)[:n_presets]:
+            out.append((idx, int(grams), name))
+    return out
 
 
 def build_dish_line(result: FoodRecognitionResult) -> tuple[str, str]:
@@ -65,7 +84,10 @@ def build_dish_line(result: FoodRecognitionResult) -> tuple[str, str]:
     if len(names) == 1:
         n = names[0]
         return (n[0].upper() + n[1:] if len(n) > 1 else n.upper(), food_line_emoji(n))
-    # несколько позиций — склеиваем как в речи
+    if len(names) == 2:
+        a, b = names[0], names[1]
+        titled = f"{a[0].upper() + a[1:]} с {b}"
+        return (titled, food_line_emoji(a))
     joined = " и ".join(names)
     return (joined[0].upper() + joined[1:] if joined else joined, food_line_emoji(names[0]))
 
@@ -144,10 +166,33 @@ def build_llm_context(
     )
 
 
+def multi_item_missing_weight_clarification_body(ctx: ClarificationLLMContext) -> str | None:
+    """Structured copy for compound dishes (no «общий вес творога и мёда»)."""
+    if len(ctx.recognized_items) < 2:
+        return None
+    missing = [it for it in ctx.recognized_items if not bool(it.get("has_grams"))]
+    if not missing:
+        return None
+    title = f"{ctx.dish_emoji} {ctx.dish_line}"
+    bullets = "\n".join(
+        f"• {str(it.get('name') or 'Позиция').strip()} — сколько граммов?" for it in missing
+    )
+    return (
+        f"{title}\n\n"
+        "Уточните порции:\n"
+        f"{bullets}\n\n"
+        "Можно написать одной фразой:\n"
+        "«творог 180 г, мёд 20 г»"
+    )
+
+
 def fallback_clarification_body(ctx: ClarificationLLMContext) -> str:
     """Local copy if OpenAI fails — still one action, no unrelated examples."""
     title = f"{ctx.dish_emoji} {ctx.dish_line}"
     if ctx.primary_issue == "missing_weight":
+        multi = multi_item_missing_weight_clarification_body(ctx)
+        if multi:
+            return multi
         return (
             f"{title}\n\n"
             "Сколько примерно было?\n\n"

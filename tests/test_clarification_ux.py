@@ -83,7 +83,7 @@ async def test_build_blocking_portion_only_includes_quick_pick_keyboard(monkeypa
     assert "Сколько примерно было?" in body
     assert merged.clarification_question == body
     assert kb is not None
-    assert any("mpt:150" in str(btn.callback_data) for row in kb.inline_keyboard for btn in row)
+    assert any("mpt:100" in str(btn.callback_data) for row in kb.inline_keyboard for btn in row)
 
 
 @pytest.mark.asyncio

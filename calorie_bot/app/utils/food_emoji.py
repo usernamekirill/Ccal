@@ -4,6 +4,13 @@
 def food_line_emoji(name: str) -> str:
     """Pick a Telegram-friendly emoji for a food name (best-effort)."""
     n = (name or "").lower()
+    if any(k in n for k in ("творог", "йогурт", "рисов", "каш")):
+        return "🥣"
+    ne = n.replace("ё", "е")
+    if "мед" in ne:
+        return "🍯"
+    if any(k in n for k in ("индейк", "куриц", "утк", "гусь", "бедр", "крыл")):
+        return "🍗"
     if any(k in n for k in ("торт", "кекс", "шарлот", "пирог", "бисквит", "чизкейк")):
         return "🍰"
     if any(k in n for k in ("суп", "борщ", "бульон")):

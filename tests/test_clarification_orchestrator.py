@@ -48,7 +48,7 @@ def test_case1_tvorog_med_only_missing_weight_priority() -> None:
 def test_case3_sharlotka_presets() -> None:
     """CASE 3: cake-like dish gets slice-oriented gram hints."""
     presets = portion_presets_for_dish("шарлотка")
-    assert presets[0][0] in (80, 100)
+    assert presets[0][0] == 100
 
 
 def test_case4_soup_presets() -> None:
