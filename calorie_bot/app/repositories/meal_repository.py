@@ -6,6 +6,7 @@ from sqlalchemy.orm import selectinload
 
 from calorie_bot.app.database.models import Meal, MealItem
 from calorie_bot.app.domain import MealDraft, MealItemDraft, MealSource, MealStatus
+from calorie_bot.app.services.calorie_service import meal_draft_calorie_totals
 
 
 class MealRepository:
@@ -16,6 +17,7 @@ class MealRepository:
 
     async def create_draft(self, user_id: int, meal: MealDraft, eaten_at: datetime) -> Meal:
         """Create a new meal draft from a structured meal draft."""
+        total_mid, t_min, t_max = meal_draft_calorie_totals(meal.items)
         total_protein, total_fat, total_carbs = _sum_macros(meal.items)
         db_meal = Meal(
             user_id=user_id,
@@ -23,9 +25,9 @@ class MealRepository:
             source=meal.source.value,
             meal_type=meal.meal_type.value if meal.meal_type else None,
             eaten_at=eaten_at,
-            total_calories=meal.total_calories,
-            total_calories_min=meal.total_calories_min,
-            total_calories_max=meal.total_calories_max,
+            total_calories=total_mid,
+            total_calories_min=t_min,
+            total_calories_max=t_max,
             has_estimated_items=meal.has_estimated_items,
             total_protein_g=total_protein,
             total_fat_g=total_fat,
@@ -35,6 +37,7 @@ class MealRepository:
         self._session.add(db_meal)
         await self._session.flush()
         await self.replace_items(db_meal.id, meal.items)
+        await self._session.refresh(db_meal, attribute_names=["items"])
         return db_meal
 
     async def get_user_meal(self, user_id: int, meal_id: int) -> Meal | None:
@@ -104,10 +107,11 @@ class MealRepository:
 
     async def replace_draft(self, meal: Meal, draft: MealDraft) -> Meal:
         """Replace draft meal totals and items."""
+        total_mid, t_min, t_max = meal_draft_calorie_totals(draft.items)
         total_protein, total_fat, total_carbs = _sum_macros(draft.items)
-        meal.total_calories = draft.total_calories
-        meal.total_calories_min = draft.total_calories_min
-        meal.total_calories_max = draft.total_calories_max
+        meal.total_calories = total_mid
+        meal.total_calories_min = t_min
+        meal.total_calories_max = t_max
         meal.has_estimated_items = draft.has_estimated_items
         meal.total_protein_g = total_protein
         meal.total_fat_g = total_fat
@@ -116,6 +120,7 @@ class MealRepository:
         meal.source = MealSource.MIXED.value if meal.source != draft.source.value else meal.source
         meal.meal_type = draft.meal_type.value if draft.meal_type else meal.meal_type
         await self.replace_items(meal.id, draft.items)
+        await self._session.refresh(meal, attribute_names=["items"])
         return meal
 
     async def confirm(self, meal: Meal) -> Meal:
@@ -130,10 +135,11 @@ class MealRepository:
 
     async def replace_meal(self, meal: Meal, draft: MealDraft) -> Meal:
         """Replace a meal's totals and items after a user edit."""
+        total_mid, t_min, t_max = meal_draft_calorie_totals(draft.items)
         total_protein, total_fat, total_carbs = _sum_macros(draft.items)
-        meal.total_calories = draft.total_calories
-        meal.total_calories_min = draft.total_calories_min
-        meal.total_calories_max = draft.total_calories_max
+        meal.total_calories = total_mid
+        meal.total_calories_min = t_min
+        meal.total_calories_max = t_max
         meal.has_estimated_items = draft.has_estimated_items
         meal.total_protein_g = total_protein
         meal.total_fat_g = total_fat
@@ -142,6 +148,7 @@ class MealRepository:
         meal.source = MealSource.MIXED.value if meal.source != draft.source.value else meal.source
         meal.meal_type = draft.meal_type.value if draft.meal_type else meal.meal_type
         await self.replace_items(meal.id, draft.items)
+        await self._session.refresh(meal, attribute_names=["items"])
         return meal
 
     async def soft_delete(self, meal: Meal, deleted_at: datetime) -> Meal:

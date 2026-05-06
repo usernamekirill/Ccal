@@ -30,7 +30,10 @@ from calorie_bot.app.messages.ux_flow import MEAL_CANCEL_FOLLOWUP
 from calorie_bot.app.post_action_message import send_post_action_message
 from calorie_bot.app.repositories.meal_change_log_repository import MealChangeLogRepository
 from calorie_bot.app.repositories.meal_repository import MealRepository
-from calorie_bot.app.services.calorie_service import CalorieService
+from calorie_bot.app.services.calorie_service import (
+    CalorieService,
+    MealDraftSaveError,
+)
 from calorie_bot.app.services.edit_interpreter_service import apply_instruction_to_food_result
 from calorie_bot.app.services.daily_stats_sync import on_confirmed_meal_edited, on_meal_confirmed
 from calorie_bot.app.services.goal_service import GoalService
@@ -168,74 +171,90 @@ async def confirm_photo_meal(
         return
     user = await UserService(session).ensure_user(callback.from_user)
     data = await state.get_data()
-    result = _result_from_state(data)
-    source = MealSource(data.get("food_source", MealSource.PHOTO.value))
-    service = CalorieService()
-    draft = service.to_meal_draft(result, source=source)
-    editing_meal_id = data.get("editing_saved_meal_id")
-    meal_service = MealService(
-        MealRepository(session),
-        MealChangeLogRepository(session),
-    )
-    if editing_meal_id:
-        meal_id = int(editing_meal_id)
-        meal_repo = MealRepository(session)
-        meal_before = await meal_repo.get_user_meal(user.id, meal_id)
-        if meal_before is None:
-            await callback.answer(MEAL_NOT_FOUND_TEXT, show_alert=True)
+    if data.get("meal_save_in_progress"):
+        await callback.answer("Уже сохраняю…", show_alert=True)
+        return
+    await state.update_data(meal_save_in_progress=True)
+    try:
+        result = _result_from_state(data)
+        source = MealSource(data.get("food_source", MealSource.PHOTO.value))
+        service = CalorieService()
+        draft = service.to_meal_draft(result, source=source)
+        try:
+            service.require_meal_draft_persistable(draft)
+        except MealDraftSaveError as exc:
+            await state.update_data(meal_save_in_progress=False)
+            await callback.answer(str(exc), show_alert=True)
             return
-        before_eaten_at = meal_before.eaten_at
-        before_status = meal_before.status
-        before_calories = meal_before.total_calories
-        before_protein_g = float(meal_before.total_protein_g or 0)
-        before_fat_g = float(meal_before.total_fat_g or 0)
-        before_carbs_g = float(meal_before.total_carbs_g or 0)
-
-        meal = await meal_service.update_saved_meal(user.id, meal_id, draft)
-        if meal is None:
-            await callback.answer(MEAL_NOT_FOUND_TEXT, show_alert=True)
-            return
-        if before_status == MealStatus.CONFIRMED.value:
-            await on_confirmed_meal_edited(
-                session,
-                settings,
-                user_sql_id=user.id,
-                before_eaten_at=before_eaten_at,
-                before_calories=before_calories,
-                before_protein_g=before_protein_g,
-                before_fat_g=before_fat_g,
-                before_carbs_g=before_carbs_g,
-                before_status=before_status,
-                after_meal=meal,
-            )
-    else:
-        meal = await meal_service.create_draft(
-            user_id=user.id,
-            meal=draft,
-            eaten_at=datetime.now(ZoneInfo(settings.timezone)),
+        editing_meal_id = data.get("editing_saved_meal_id")
+        meal_service = MealService(
+            MealRepository(session),
+            MealChangeLogRepository(session),
         )
-        await MealRepository(session).confirm(meal)
-        await on_meal_confirmed(session, settings, user_sql_id=user.id, meal=meal)
-    await commit_db_work_before_telegram(session)
-    await state.clear()
-    brief = service.format_saved_meal_brief(result)
-    await send_post_action_message(
-        callback.message,
-        session=session,
-        settings=settings,
-        user_id=user.id,
-        meal_brief_text=brief,
-        edit_in_place=True,
-    )
-    meal_was_new = not bool(editing_meal_id)
-    motivation = await create_motivation_service(session, settings).maybe_emit(
-        user.id,
-        "meal_save",
-        meal_was_new=meal_was_new,
-    )
-    if motivation:
-        await callback.message.answer(motivation, reply_markup=navigation_footer_keyboard())
-    await callback.answer()
+        if editing_meal_id:
+            meal_id = int(editing_meal_id)
+            meal_repo = MealRepository(session)
+            meal_before = await meal_repo.get_user_meal(user.id, meal_id)
+            if meal_before is None:
+                await state.update_data(meal_save_in_progress=False)
+                await callback.answer(MEAL_NOT_FOUND_TEXT, show_alert=True)
+                return
+            before_eaten_at = meal_before.eaten_at
+            before_status = meal_before.status
+            before_calories = meal_before.total_calories
+            before_protein_g = float(meal_before.total_protein_g or 0)
+            before_fat_g = float(meal_before.total_fat_g or 0)
+            before_carbs_g = float(meal_before.total_carbs_g or 0)
+
+            meal = await meal_service.update_saved_meal(user.id, meal_id, draft)
+            if meal is None:
+                await state.update_data(meal_save_in_progress=False)
+                await callback.answer(MEAL_NOT_FOUND_TEXT, show_alert=True)
+                return
+            if before_status == MealStatus.CONFIRMED.value:
+                await on_confirmed_meal_edited(
+                    session,
+                    settings,
+                    user_sql_id=user.id,
+                    before_eaten_at=before_eaten_at,
+                    before_calories=before_calories,
+                    before_protein_g=before_protein_g,
+                    before_fat_g=before_fat_g,
+                    before_carbs_g=before_carbs_g,
+                    before_status=before_status,
+                    after_meal=meal,
+                )
+        else:
+            meal = await meal_service.create_draft(
+                user_id=user.id,
+                meal=draft,
+                eaten_at=datetime.now(ZoneInfo(settings.timezone)),
+            )
+            await MealRepository(session).confirm(meal)
+            await on_meal_confirmed(session, settings, user_sql_id=user.id, meal=meal)
+        await commit_db_work_before_telegram(session)
+        await state.clear()
+        brief = service.format_saved_meal_brief(result)
+        await send_post_action_message(
+            callback.message,
+            session=session,
+            settings=settings,
+            user_id=user.id,
+            meal_brief_text=brief,
+            edit_in_place=True,
+        )
+        meal_was_new = not bool(editing_meal_id)
+        motivation = await create_motivation_service(session, settings).maybe_emit(
+            user.id,
+            "meal_save",
+            meal_was_new=meal_was_new,
+        )
+        if motivation:
+            await callback.message.answer(motivation, reply_markup=navigation_footer_keyboard())
+        await callback.answer()
+    except Exception:
+        await state.update_data(meal_save_in_progress=False)
+        raise
 
 
 @router.callback_query(F.data == "photo_meal:cancel")

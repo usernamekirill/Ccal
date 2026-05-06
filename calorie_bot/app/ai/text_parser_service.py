@@ -7,7 +7,7 @@ from calorie_bot.app.services.calorie_service import CalorieService
 
 
 class FoodTextParserService:
-    """Extract food items and calories from natural-language meal text."""
+    """Extract food items and calories from natural-language meal text (OpenAI-first)."""
 
     def __init__(
         self,
@@ -22,34 +22,40 @@ class FoodTextParserService:
         self,
         text: str,
         default_meal_type: str | None = None,
+        *,
+        context: dict | None = None,
     ) -> FoodRecognitionResult:
-        """Return a validated food recognition result from user text (OpenAI first, then offline fallbacks)."""
-        from calorie_bot.app.nlp.meal_text_preprocess import (
-            normalize_meal_input_text,
-            try_parse_plaintext_meal_line,
-        )
-
+        """Return a validated food recognition result (always via OpenAI; no local meal parsing)."""
         calorie_service = CalorieService()
-        nt = normalize_meal_input_text(text)
-        draft = await TextFoodParser(self._settings, self._client).parse_food_text(
-            nt,
-            {"default_meal_type": default_meal_type},
-        )
+        ctx: dict = dict(context) if context else {}
+        if default_meal_type is not None:
+            ctx.setdefault("default_meal_type", default_meal_type)
+        cd = ctx.get("current_draft")
+        if isinstance(cd, dict):
+            ctx["current_draft"] = calorie_service.result_from_dict(cd)
 
-        if not draft.raw_parse_failed:
-            fr = draft.food_result
-            if fr.items or (fr.needs_clarification and (fr.clarification_question or "").strip()):
-                return calorie_service.validate_food_result(fr)
+        draft = await TextFoodParser(self._settings, self._client).parse_food_text(text, ctx)
 
-        fb = try_parse_plaintext_meal_line(nt)
-        if fb is not None:
-            return calorie_service.validate_food_result(fb)
+        def _soft_failure() -> FoodRecognitionResult:
+            return calorie_service.validate_food_result(
+                FoodRecognitionResult(
+                    items=[],
+                    total_calories=0,
+                    overall_confidence=0.35,
+                    comment="Нужно уточнение",
+                    needs_clarification=True,
+                    clarification_question=(
+                        "Не вышло обработать ответ модели. Напишите ещё раз, что вы съели "
+                        "(можно своими словами; вес укажите, если знаете)."
+                    ),
+                )
+            )
 
-        return calorie_service.validate_food_result(
-            FoodRecognitionResult(
-                items=[],
-                total_calories=0,
-                overall_confidence=0.0,
-                comment="Текст не распознан",
-            ),
-        )
+        if draft.raw_parse_failed:
+            return _soft_failure()
+
+        out = calorie_service.validate_food_result(draft.food_result)
+        has_clar = bool(out.needs_clarification and (out.clarification_question or "").strip())
+        if out.items or has_clar:
+            return out
+        return _soft_failure()

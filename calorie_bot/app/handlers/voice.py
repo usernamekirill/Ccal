@@ -11,16 +11,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from calorie_bot.app.ai.speech_client import SpeechToTextService
 from calorie_bot.app.ai.text_parser_service import FoodTextParserService
 from calorie_bot.app.config import Settings
-from calorie_bot.app.domain import GramsSource, MealSource
+from calorie_bot.app.domain import MealSource
 from calorie_bot.app.keyboards.confirmation import recognition_trouble_keyboard
 from calorie_bot.app.keyboards.meal import photo_review_keyboard
 from calorie_bot.app.messages.texts import (
     RECOGNITION_UNCERTAIN_TEXT,
     TEXT_FOOD_CLARIFICATION_PREFIX,
+    TEXT_FOOD_PROCESSING_TEXT,
 )
-from calorie_bot.app.security.input_validation import ensure_audio_duration
+from calorie_bot.app.security.input_validation import ensure_audio_duration, ensure_meal_text_length
 from calorie_bot.app.services.calorie_service import CalorieService
-from calorie_bot.app.services.edit_interpreter_service import apply_instruction_to_food_result
 from calorie_bot.app.services.goal_service import GoalService
 from calorie_bot.app.services.onboarding_gate import food_logging_blocked_message
 from calorie_bot.app.services.security_service import SecurityService
@@ -28,7 +28,6 @@ from calorie_bot.app.services.user_service import UserService
 from calorie_bot.app.services.user_settings_service import create_user_settings_service
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
-from calorie_bot.app.handlers.text_food import _WEIGHT_REPLY_HINT, _try_finish_after_loose_weight_reply
 from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
 from calorie_bot.app.utils.meal_type import infer_meal_type
 
@@ -73,23 +72,90 @@ async def handle_voice_or_audio(
     finally:
         security.cleanup(audio_path)
 
+    timezone = ZoneInfo(settings.timezone)
     data = await state.get_data()
     calorie_service = CalorieService()
     st = await state.get_state()
 
     if st == MealStates.waiting_for_weight.state and data.get("pending_food_result_draft"):
-        handled = await _try_finish_after_loose_weight_reply(
-            message,
-            state,
-            session,
-            settings,
-            calorie_service,
-            data["pending_food_result_draft"],
-            transcript.strip(),
-            food_source=MealSource.AUDIO.value,
+        ensure_meal_text_length(transcript.strip(), settings.max_meal_text_chars)
+        _dmt = data.get("default_meal_type")
+        default_meal_type = (
+            str(_dmt).strip()
+            if _dmt is not None and str(_dmt).strip()
+            else infer_meal_type(datetime.now(timezone)).value
         )
-        if not handled:
-            await message.answer(_WEIGHT_REPLY_HINT)
+        await message.answer(TEXT_FOOD_PROCESSING_TEXT)
+        try:
+            result = await FoodTextParserService(settings).parse_food_text(
+                transcript.strip(),
+                default_meal_type=default_meal_type,
+                context={"current_draft": data["pending_food_result_draft"]},
+            )
+        except Exception:
+            _log.exception("voice_weight_followup_parse_failed")
+            await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+            return
+        result = calorie_service.with_default_meal_type(result, infer_meal_type(datetime.now(timezone)))
+        try:
+            result = await calorie_service.enrich_after_text_processing(
+                result, transcript, session, settings
+            )
+        except Exception:
+            _log.exception("voice_weight_followup_enrich_failed")
+            await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+            return
+        result = calorie_service.apply_clarification_guards(result)
+        if calorie_service.requires_blocking_clarification(result):
+            next_state = (
+                MealStates.waiting_for_weight
+                if calorie_service.is_portion_weight_blocking_only(result)
+                else MealStates.waiting_for_correction
+            )
+            await state.set_state(next_state)
+            await state.update_data(
+                **fsm_data_blocking_text_clarification(
+                    calorie_service,
+                    result,
+                    pending_text=str(data.get("pending_text_food") or transcript),
+                    default_meal_type=default_meal_type,
+                    voice_transcript=transcript,
+                ),
+            )
+            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+            return
+        if not result.items:
+            if result.needs_clarification and result.clarification_question:
+                await state.set_state(MealStates.waiting_for_correction)
+                await state.update_data(
+                    pending_text_food=str(data.get("pending_text_food") or ""),
+                    default_meal_type=default_meal_type,
+                    clarification_mode=None,
+                    pending_food_result_draft=None,
+                    pending_food=None,
+                    voice_transcript=transcript,
+                )
+                await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX} {result.clarification_question}")
+            else:
+                await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+            return
+        await state.set_state(MealStates.photo_review)
+        await state.update_data(
+            photo_food_result=calorie_service.result_to_dict(result),
+            food_source=MealSource.AUDIO.value,
+            pending_text_food=None,
+            pending_food_result_draft=None,
+            pending_food=None,
+            clarification_mode=None,
+            voice_transcript=transcript,
+        )
+        body = calorie_service.format_result(result)
+        if result.needs_clarification and result.clarification_question:
+            body = f"{body}\n\n⚠️ {result.clarification_question}"
+        await message.answer(
+            f"Учёл: «{transcript}»\n\n{body}",
+            reply_markup=photo_review_keyboard(),
+        )
         return
 
     if data.get("photo_food_result") and st in (
@@ -97,15 +163,26 @@ async def handle_voice_or_audio(
         MealStates.photo_editing.state,
     ):
         current = calorie_service.result_from_dict(data["photo_food_result"])
+        ensure_meal_text_length(transcript.strip(), settings.max_meal_text_chars)
+        default_mt = current.meal_type or infer_meal_type(datetime.now(timezone)).value
+        await message.answer(TEXT_FOOD_PROCESSING_TEXT)
         try:
-            updated = await apply_instruction_to_food_result(
-                settings,
-                transcript,
-                current,
-                grams_source=GramsSource.VOICE_CORRECTION,
-                session=session,
+            updated = await FoodTextParserService(settings).parse_food_text(
+                transcript.strip(),
+                default_meal_type=default_mt,
+                context={"current_draft": current},
             )
         except Exception:
+            _log.exception("voice_draft_edit_parse_failed")
+            await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+            return
+        updated = calorie_service.with_default_meal_type(updated, infer_meal_type(datetime.now(timezone)))
+        try:
+            updated = await calorie_service.enrich_after_text_processing(
+                updated, transcript, session, settings
+            )
+        except Exception:
+            _log.exception("voice_draft_edit_enrich_failed")
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
             return
         updated = calorie_service.apply_clarification_guards(updated)
@@ -134,7 +211,6 @@ async def handle_voice_or_audio(
         )
         return
 
-    timezone = ZoneInfo(settings.timezone)
     default_meal_type = infer_meal_type(datetime.now(timezone))
     try:
         result = await FoodTextParserService(settings).parse_food_text(
@@ -147,7 +223,6 @@ async def handle_voice_or_audio(
         return
 
     result = calorie_service.with_default_meal_type(result, default_meal_type)
-    result = calorie_service.apply_user_text_gram_priority(transcript, result)
     try:
         result = await calorie_service.enrich_after_text_processing(
             result, transcript, session, settings

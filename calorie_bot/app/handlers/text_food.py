@@ -33,76 +33,6 @@ from calorie_bot.app.utils.meal_type import infer_meal_type
 router = Router(name="text_food")
 _log = logging.getLogger(__name__)
 
-_WEIGHT_REPLY_HINT = "Напишите вес в граммах, например: 120 или 120 г"
-
-
-async def _try_finish_after_loose_weight_reply(
-    message: Message,
-    state: FSMContext,
-    session: AsyncSession,
-    settings: Settings,
-    calorie_service: CalorieService,
-    draft_dict: dict,
-    reply_text: str,
-    *,
-    food_source: str,
-) -> bool:
-    """Handle ``100`` / ``100 г`` against a single-item serialized draft. Returns True if consumed."""
-    current = calorie_service.result_from_dict(draft_dict)
-    try:
-        updated = await calorie_service.apply_user_loose_weight_reply(
-            current,
-            reply_text.strip(),
-            session=session,
-            settings=settings,
-        )
-    except Exception:
-        _log.exception("loose_weight_reply_failed")
-        await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
-        return True
-    if updated is None:
-        return False
-    updated = calorie_service.apply_clarification_guards(updated)
-    if calorie_service.requires_blocking_clarification(updated):
-        next_state = (
-            MealStates.waiting_for_weight
-            if calorie_service.is_portion_weight_blocking_only(updated)
-            else MealStates.waiting_for_correction
-        )
-        await state.set_state(next_state)
-        pf = None
-        if len(updated.items) == 1:
-            it = updated.items[0]
-            pf = {
-                "name": it.name,
-                "quantity": float(it.quantity) if it.quantity is not None else 1.0,
-                "unit": it.unit_type or "piece",
-            }
-        await state.update_data(
-            pending_food_result_draft=calorie_service.result_to_dict(updated),
-            clarification_mode="text_draft",
-            pending_food=pf,
-        )
-        await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{updated.clarification_question}")
-        return True
-    if not updated.items:
-        await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
-        return True
-    await state.set_state(MealStates.photo_review)
-    await state.update_data(
-        photo_food_result=calorie_service.result_to_dict(updated),
-        food_source=food_source,
-        pending_text_food=None,
-        pending_food_result_draft=None,
-        pending_food=None,
-        clarification_mode=None,
-    )
-    reply = calorie_service.format_result(updated)
-    if updated.needs_clarification and updated.clarification_question:
-        reply = f"{reply}\n\n⚠️ {updated.clarification_question}"
-    await message.answer(reply, reply_markup=photo_review_keyboard())
-    return True
-
 
 @router.message(MealStates.waiting_for_weight, F.text)
 async def handle_waiting_for_weight(
@@ -111,7 +41,7 @@ async def handle_waiting_for_weight(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """Second step after «яблоко»: user sends only grams (100 / 100 г) without LLM."""
+    """After a weight hint, route the user's grams line through the text-food model with draft context."""
     if message.from_user is None or message.text is None or message.text.startswith("/"):
         return
     user_row = await UserService(session).ensure_user(message.from_user)
@@ -131,19 +61,82 @@ async def handle_waiting_for_weight(
         return
 
     ensure_meal_text_length(message.text, settings.max_meal_text_chars)
-    calorie_service = CalorieService()
-    handled = await _try_finish_after_loose_weight_reply(
-        message,
-        state,
-        session,
-        settings,
-        calorie_service,
-        draft,
-        message.text,
-        food_source=MealSource.TEXT.value,
+    _dmt = data.get("default_meal_type")
+    default_meal_type = (
+        str(_dmt).strip()
+        if _dmt is not None and str(_dmt).strip()
+        else infer_meal_type(datetime.now()).value
     )
-    if not handled:
-        await message.answer(_WEIGHT_REPLY_HINT)
+    calorie_service = CalorieService()
+    await message.answer(TEXT_FOOD_PROCESSING_TEXT)
+    try:
+        result = await FoodTextParserService(settings).parse_food_text(
+            message.text.strip(),
+            default_meal_type=default_meal_type,
+            context={"current_draft": draft},
+        )
+    except Exception:
+        _log.exception("text_meal_weight_followup_parse_failed")
+        await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+        return
+
+    result = calorie_service.with_default_meal_type(result, infer_meal_type(datetime.now()))
+    try:
+        result = await calorie_service.enrich_after_text_processing(
+            result, message.text, session, settings
+        )
+    except Exception:
+        _log.exception("text_meal_weight_followup_enrich_failed")
+        await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+        return
+
+    result = calorie_service.apply_clarification_guards(result)
+    if calorie_service.requires_blocking_clarification(result):
+        next_state = (
+            MealStates.waiting_for_weight
+            if calorie_service.is_portion_weight_blocking_only(result)
+            else MealStates.waiting_for_correction
+        )
+        await state.set_state(next_state)
+        await state.update_data(
+            **fsm_data_blocking_text_clarification(
+                calorie_service,
+                result,
+                pending_text=str(data.get("pending_text_food") or message.text),
+                default_meal_type=default_meal_type,
+            ),
+        )
+        await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
+        return
+
+    if not result.items:
+        if result.needs_clarification and result.clarification_question:
+            await state.set_state(MealStates.waiting_for_correction)
+            await state.update_data(
+                pending_text_food=str(data.get("pending_text_food") or ""),
+                default_meal_type=default_meal_type,
+                clarification_mode=None,
+                pending_food_result_draft=None,
+                pending_food=None,
+            )
+            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX} {result.clarification_question}")
+        else:
+            await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+        return
+
+    await state.set_state(MealStates.photo_review)
+    await state.update_data(
+        photo_food_result=calorie_service.result_to_dict(result),
+        food_source=MealSource.TEXT_AI.value,
+        pending_text_food=None,
+        pending_food_result_draft=None,
+        pending_food=None,
+        clarification_mode=None,
+    )
+    reply = calorie_service.format_result(result)
+    if result.needs_clarification and result.clarification_question:
+        reply = f"{reply}\n\n⚠️ {result.clarification_question}"
+    await message.answer(reply, reply_markup=photo_review_keyboard())
 
 
 @router.message(MealStates.waiting_for_correction, F.text)
@@ -194,7 +187,7 @@ async def handle_text_food_clarification(
             pending_text_food=None,
             pending_food_result_draft=None,
             pending_food=None,
-            food_source=data.get("food_source", MealSource.TEXT.value),
+            food_source=data.get("food_source", MealSource.TEXT_AI.value),
         )
         reply = calorie_service.format_result(updated)
         if updated.needs_clarification and updated.clarification_question:
@@ -204,79 +197,80 @@ async def handle_text_food_clarification(
 
     if data.get("clarification_mode") == "text_draft" and data.get("pending_food_result_draft"):
         ensure_meal_text_length(message.text, settings.max_meal_text_chars)
-        done = await _try_finish_after_loose_weight_reply(
-            message,
-            state,
-            session,
-            settings,
-            calorie_service,
-            data["pending_food_result_draft"],
-            message.text,
-            food_source=MealSource.TEXT.value,
-        )
-        if done:
-            return
-        current = calorie_service.result_from_dict(data["pending_food_result_draft"])
+        default_meal_type = str(data.get("default_meal_type", infer_meal_type(datetime.now()).value))
+        await message.answer(TEXT_FOOD_PROCESSING_TEXT)
         try:
-            updated = await apply_instruction_to_food_result(
-                settings,
+            result = await FoodTextParserService(settings).parse_food_text(
                 message.text.strip(),
-                current,
-                session=session,
+                default_meal_type=default_meal_type,
+                context={"current_draft": data["pending_food_result_draft"]},
             )
         except Exception:
+            _log.exception("text_meal_clarification_parse_failed")
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
             return
-        updated = calorie_service.apply_clarification_guards(updated)
-        if calorie_service.requires_blocking_clarification(updated):
+
+        result = calorie_service.with_default_meal_type(result, infer_meal_type(datetime.now()))
+        try:
+            result = await calorie_service.enrich_after_text_processing(
+                result, message.text, session, settings
+            )
+        except Exception:
+            _log.exception("text_meal_clarification_enrich_failed")
+            await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+            return
+
+        result = calorie_service.apply_clarification_guards(result)
+        if calorie_service.requires_blocking_clarification(result):
             next_state = (
                 MealStates.waiting_for_weight
-                if calorie_service.is_portion_weight_blocking_only(updated)
+                if calorie_service.is_portion_weight_blocking_only(result)
                 else MealStates.waiting_for_correction
             )
             await state.set_state(next_state)
             pf = None
-            if len(updated.items) == 1:
-                it = updated.items[0]
+            if len(result.items) == 1:
+                it = result.items[0]
                 pf = {
                     "name": it.name,
                     "quantity": float(it.quantity) if it.quantity is not None else 1.0,
                     "unit": it.unit_type or "piece",
                 }
             await state.update_data(
-                pending_food_result_draft=calorie_service.result_to_dict(updated),
+                pending_food_result_draft=calorie_service.result_to_dict(result),
                 clarification_mode="text_draft",
                 pending_food=pf,
             )
-            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{updated.clarification_question}")
+            await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
             return
-        if not updated.items:
+        if not result.items:
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
             return
         await state.set_state(MealStates.photo_review)
         await state.update_data(
-            photo_food_result=calorie_service.result_to_dict(updated),
+            photo_food_result=calorie_service.result_to_dict(result),
             pending_food_result_draft=None,
             clarification_mode=None,
             pending_text_food=None,
             pending_food=None,
-            food_source=MealSource.TEXT.value,
+            food_source=MealSource.TEXT_AI.value,
         )
-        reply = calorie_service.format_result(updated)
-        if updated.needs_clarification and updated.clarification_question:
-            reply = f"{reply}\n\n⚠️ {updated.clarification_question}"
+        reply = calorie_service.format_result(result)
+        if result.needs_clarification and result.clarification_question:
+            reply = f"{reply}\n\n⚠️ {result.clarification_question}"
         await message.answer(reply, reply_markup=photo_review_keyboard())
         return
 
     original_text = str(data.get("pending_text_food", ""))
     default_meal_type = str(data.get("default_meal_type", infer_meal_type(datetime.now()).value))
-    combined_text = f"{original_text}. Уточнение: {message.text or ''}"
-    ensure_meal_text_length(combined_text, settings.max_meal_text_chars)
+    ensure_meal_text_length(message.text, settings.max_meal_text_chars)
+    await message.answer(TEXT_FOOD_PROCESSING_TEXT)
 
     try:
         result = await FoodTextParserService(settings).parse_food_text(
-            combined_text,
+            message.text.strip(),
             default_meal_type=default_meal_type,
+            context={"prior_user_message": original_text} if original_text else None,
         )
     except Exception:
         _log.exception("text_meal_clarification_parse_failed")
@@ -284,10 +278,9 @@ async def handle_text_food_clarification(
         return
 
     result = calorie_service.with_default_meal_type(result, infer_meal_type(datetime.now()))
-    result = calorie_service.apply_user_text_gram_priority(combined_text, result)
     try:
         result = await calorie_service.enrich_after_text_processing(
-            result, combined_text, session, settings
+            result, message.text, session, settings
         )
     except Exception:
         _log.exception("text_meal_clarification_enrich_failed")
@@ -306,7 +299,9 @@ async def handle_text_food_clarification(
             **fsm_data_blocking_text_clarification(
                 calorie_service,
                 result,
-                pending_text=combined_text,
+                pending_text=f"{original_text}. Уточнение: {message.text or ''}".strip()
+                if original_text
+                else (message.text or ""),
                 default_meal_type=default_meal_type,
             ),
         )
@@ -317,7 +312,7 @@ async def handle_text_food_clarification(
         if result.needs_clarification and result.clarification_question:
             await state.set_state(MealStates.waiting_for_correction)
             await state.update_data(
-                pending_text_food=original_text,
+                pending_text_food=original_text or message.text or "",
                 default_meal_type=default_meal_type,
                 clarification_mode=None,
                 pending_food_result_draft=None,
@@ -331,7 +326,7 @@ async def handle_text_food_clarification(
     await state.set_state(MealStates.photo_review)
     await state.update_data(
         photo_food_result=calorie_service.result_to_dict(result),
-        food_source=MealSource.TEXT.value,
+        food_source=MealSource.TEXT_AI.value,
         pending_text_food=None,
         pending_food_result_draft=None,
         pending_food=None,
@@ -350,7 +345,7 @@ async def handle_draft_text_correction(
     session: AsyncSession,
     settings: Settings,
 ) -> None:
-    """While a meal draft is visible, treat a new text line as an edit, not a new meal."""
+    """While a meal draft is visible, treat a new text line as an edit via the text-food model + draft context."""
     if message.from_user is None or message.text is None or message.text.startswith("/"):
         return
     data = await state.get_data()
@@ -370,15 +365,31 @@ async def handle_draft_text_correction(
     calorie_service = CalorieService()
     current = calorie_service.result_from_dict(data["photo_food_result"])
     ensure_meal_text_length(message.text, settings.max_meal_text_chars)
+    timezone = ZoneInfo(settings.timezone)
+    default_mt = current.meal_type or infer_meal_type(datetime.now(timezone)).value
 
+    await message.answer(TEXT_FOOD_PROCESSING_TEXT)
     try:
-        updated = await apply_instruction_to_food_result(
-            settings,
-            message.text,
-            current,
-            session=session,
+        updated = await FoodTextParserService(settings).parse_food_text(
+            message.text.strip(),
+            default_meal_type=default_mt,
+            context={"current_draft": current},
         )
     except Exception:
+        _log.exception("draft_text_correction_parse_failed")
+        await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+        return
+
+    updated = calorie_service.with_default_meal_type(
+        updated,
+        infer_meal_type(datetime.now(timezone)),
+    )
+    try:
+        updated = await calorie_service.enrich_after_text_processing(
+            updated, message.text, session, settings
+        )
+    except Exception:
+        _log.exception("draft_text_correction_enrich_failed")
         await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
         return
 
@@ -394,7 +405,7 @@ async def handle_draft_text_correction(
 
     await state.update_data(
         photo_food_result=calorie_service.result_to_dict(updated),
-        food_source=data.get("food_source", MealSource.TEXT.value),
+        food_source=data.get("food_source", MealSource.TEXT_AI.value),
     )
     reply = calorie_service.format_result(updated)
     if updated.needs_clarification and updated.clarification_question:
@@ -443,7 +454,6 @@ async def handle_text_food(
 
     calorie_service = CalorieService()
     result = calorie_service.with_default_meal_type(result, default_meal_type)
-    result = calorie_service.apply_user_text_gram_priority(message.text, result)
     try:
         result = await calorie_service.enrich_after_text_processing(
             result, message.text, session, settings
@@ -490,7 +500,7 @@ async def handle_text_food(
     await state.set_state(MealStates.photo_review)
     await state.update_data(
         photo_food_result=calorie_service.result_to_dict(result),
-        food_source=MealSource.TEXT.value,
+        food_source=MealSource.TEXT_AI.value,
         pending_text_food=None,
         pending_food_result_draft=None,
         pending_food=None,

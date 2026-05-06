@@ -25,6 +25,7 @@ _VALID_WINDOWS = frozenset({7, 14, 30})
 _SOURCE_LABELS: dict[str, str] = {
     MealSource.PHOTO.value: "фото",
     MealSource.TEXT.value: "текст",
+    MealSource.TEXT_AI.value: "текст (AI)",
     MealSource.AUDIO.value: "голос",
     MealSource.MIXED.value: "с правками",
     MealSource.MANUAL.value: "вручную",

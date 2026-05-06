@@ -170,6 +170,33 @@ def recognition_item_mid_calories(item: FoodItemRecognition) -> int:
     return 0
 
 
+class MealDraftSaveError(ValueError):
+    """Raised when a meal draft must not be persisted to storage."""
+
+
+def ensure_meal_draft_persistable(draft: MealDraft) -> None:
+    """Raise :class:`MealDraftSaveError` if the draft is unsafe to save.
+
+    Blocks empty drafts, unnamed lines, and quantified portions without usable kcal
+    (no phantom zeros in ``daily_stats``).
+    """
+    if not draft.items:
+        raise MealDraftSaveError("Нет продуктов для сохранения.")
+    for idx, it in enumerate(draft.items, start=1):
+        name = (it.name or "").strip()
+        if len(name) < 1:
+            raise MealDraftSaveError(f"Пустое название продукта (строка {idx}).")
+        has_mass = it.grams is not None or (
+            it.grams_min is not None and it.grams_max is not None
+        )
+        eff = draft_item_effective_calories(it)
+        has_band = it.calories_min is not None and it.calories_max is not None
+        if has_mass and eff <= 0 and not has_band:
+            raise MealDraftSaveError(
+                f"Для «{name}» не удалось посчитать калории — уточните порцию."
+            )
+
+
 class CalorieService:
     """Format, recalculate, and edit food recognition results."""
 
@@ -473,6 +500,10 @@ class CalorieService:
             confidence=result.overall_confidence,
             notes=result.comment,
         )
+
+    def require_meal_draft_persistable(self, draft: MealDraft) -> None:
+        """Raise :class:`MealDraftSaveError` if the draft must not be written to storage."""
+        ensure_meal_draft_persistable(draft)
 
     def draft_to_result(self, draft: MealDraft) -> FoodRecognitionResult:
         """Convert a stored meal draft into a reviewable recognition result."""

@@ -14,3 +14,15 @@ def test_stat_anchor_aligns_to_local_midnight() -> None:
     assert anchor.tzinfo == tz
     assert anchor.time() == time.min
     assert anchor.date() == eaten.date()
+
+
+def test_stat_anchor_naive_wall_time_uses_user_zone_not_server_local() -> None:
+    """SQLite returns naive datetimes; treat them as wall time in the user's IANA zone.
+
+    :meth:`~datetime.datetime.astimezone` on naive values uses the *server* local
+    timezone and can shift the calendar day (breaking ``daily_stats`` rollups).
+    """
+    tz = ZoneInfo("Europe/Moscow")
+    naive_local = datetime(2026, 5, 2, 14, 0, 0)
+    anchor = stat_anchor_from_eaten_at(naive_local, "Europe/Moscow")
+    assert anchor == datetime(2026, 5, 2, 0, 0, 0, tzinfo=tz)

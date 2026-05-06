@@ -69,6 +69,7 @@ class StructuredTextMealItem(BaseModel):
     carbs: float | None = Field(default=None, ge=0)
     confidence: float | None = Field(default=None, ge=0, le=1)
     is_estimated: bool = True
+    user_stated_mass: bool = False
 
 
 class StructuredTextMealResponse(BaseModel):
@@ -77,8 +78,10 @@ class StructuredTextMealResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     recognized: bool = True
+    mode: str | None = "create"
     needs_clarification: bool = False
     clarification_question: str | None = None
+    clarification_options: list[str] = Field(default_factory=list)
     meal_type: str | None = "unknown"
     items: list[StructuredTextMealItem] = Field(default_factory=list)
     totals: _TotalsPayload | None = None
@@ -108,8 +111,6 @@ def _normalize_llm_unit(unit: str | None) -> Literal["g", "piece", "other"]:
 
 def _item_to_food_recognition(
     raw: StructuredTextMealItem,
-    *,
-    user_text_has_gram_token: bool,
 ) -> FoodItemRecognition:
     """Map one structured item to :class:`FoodItemRecognition`."""
     g = raw.weight_grams if raw.weight_grams is not None else raw.estimated_grams
@@ -146,7 +147,7 @@ def _item_to_food_recognition(
 
     if ukind == "piece" and g is not None:
         grams_source = GramsSource.USER_QUANTITY.value
-    elif g is not None and (user_text_has_gram_token or raw.weight_grams is not None):
+    elif g is not None and raw.user_stated_mass:
         grams_source = GramsSource.USER.value
     elif g is not None:
         grams_source = GramsSource.AI_PHOTO.value
@@ -192,10 +193,56 @@ def _item_to_food_recognition(
     )
 
 
-def _user_text_suggests_explicit_grams(user_text: str) -> bool:
-    from calorie_bot.app.services.food_parser_service import extract_ordered_gram_values
+def food_result_to_draft_context_payload(fr: FoodRecognitionResult) -> dict[str, Any]:
+    """Serialize a recognition draft for the LLM JSON envelope (current_draft)."""
+    items_out: list[dict[str, Any]] = []
+    for it in fr.items:
+        items_out.append(
+            {
+                "name": it.name,
+                "portion_description": it.portion_description,
+                "weight_grams": it.estimated_grams,
+                "quantity": it.quantity,
+                "unit": it.unit_type or "g",
+                "calories": it.calories,
+                "protein": it.protein,
+                "fat": it.fat,
+                "carbs": it.carbs,
+                "calories_per_100g": it.calories_per_100g,
+                "protein_per_100g": it.protein_per_100g,
+                "fat_per_100g": it.fat_per_100g,
+                "carbs_per_100g": it.carbs_per_100g,
+                "needs_portion_clarification": it.needs_portion_clarification,
+            }
+        )
+    return {"items": items_out, "meal_type": fr.meal_type}
 
-    return bool(extract_ordered_gram_values(user_text))
+
+def build_text_food_user_envelope(
+    user_message: str,
+    *,
+    default_meal_type: str | None,
+    current_draft: FoodRecognitionResult | None,
+    prior_user_message: str | None = None,
+) -> str:
+    """Build JSON string sent as the user message to the text-food chat completion."""
+    from calorie_bot.app.nlp.meal_text_preprocess import normalize_meal_input_text
+
+    um = normalize_meal_input_text(user_message)
+    raw_dmt = default_meal_type.strip().lower() if isinstance(default_meal_type, str) else None
+    payload: dict[str, Any] = {
+        "user_message": um,
+        "default_meal_type_hint": raw_dmt,
+    }
+    if prior_user_message:
+        payload["prior_user_message"] = normalize_meal_input_text(prior_user_message)
+    if current_draft and current_draft.items:
+        payload["current_draft"] = food_result_to_draft_context_payload(current_draft)
+        payload["conversation_mode"] = "update"
+    else:
+        payload["current_draft"] = None
+        payload["conversation_mode"] = "create"
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def structured_meal_to_food_result(
@@ -207,11 +254,10 @@ def structured_meal_to_food_result(
 ) -> FoodRecognitionResult:
     """Convert validated LLM payload into :class:`FoodRecognitionResult`."""
     svc = calorie_service or CalorieService()
-    gram_hint = _user_text_suggests_explicit_grams(user_text)
 
     items_out: list[FoodItemRecognition] = []
     for raw in data.items:
-        items_out.append(_item_to_food_recognition(raw, user_text_has_gram_token=gram_hint))
+        items_out.append(_item_to_food_recognition(raw))
 
     mt = (data.meal_type or "").strip().lower()
     meal_type: str | None = None
@@ -225,7 +271,9 @@ def structured_meal_to_food_result(
 
     if not data.recognized:
         needs_clar = True
-        clar_q = clar_q or "Не получилось разобрать текст. Уточните блюдо и вес, например «гречка 200 г»."
+        clar_q = clar_q or (
+            "Не получилось разобрать ввод. Опишите блюдо своими словами и, если можете, укажите порцию в граммах."
+        )
     elif (
         items_out
         and all(has_quantified_portion_mass(i.estimated_grams, i.grams_min, i.grams_max) for i in items_out)
@@ -244,6 +292,10 @@ def structured_meal_to_food_result(
             clar_q = None
 
     comment = (data.reasoning_summary or "").strip() or "Оценка приёма пищи"
+    opts = [o.strip() for o in (data.clarification_options or []) if str(o).strip()]
+    if needs_clar and clar_q and opts:
+        bullet = "\n".join(f"• {o}" for o in opts)
+        clar_q = f"{clar_q.rstrip()}\n{bullet}"
     raw_fr = FoodRecognitionResult(
         items=items_out,
         total_calories=0,
@@ -281,15 +333,29 @@ class TextFoodParser:
         ctx = context or {}
         raw_dmt = ctx.get("default_meal_type")
         dmt: str | None = raw_dmt.strip().lower() if isinstance(raw_dmt, str) else None
+        current = ctx.get("current_draft")
+        if current is not None and not isinstance(current, FoodRecognitionResult):
+            _log.warning(
+                "text_food_invalid_current_draft_type",
+                extra={"type": type(current).__name__},
+            )
+            current = None
+        prior_raw = ctx.get("prior_user_message")
+        prior_s = prior_raw.strip() if isinstance(prior_raw, str) and prior_raw.strip() else None
 
-        default_hint = f"\nЕсли тип приёма пищи не указан, используй meal_type={dmt}." if dmt else ""
+        envelope = build_text_food_user_envelope(
+            user_text,
+            default_meal_type=dmt,
+            current_draft=current,
+            prior_user_message=prior_s,
+        )
         try:
             response = await self._client.chat.completions.create(
                 model=self._settings.openai_correction_model,
                 response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": TEXT_FOOD_STRUCTURED_PROMPT},
-                    {"role": "user", "content": user_text + default_hint},
+                    {"role": "user", "content": envelope},
                 ],
             )
             content = response.choices[0].message.content or "{}"

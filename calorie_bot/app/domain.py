@@ -42,6 +42,7 @@ class MealSource(StrEnum):
 
     PHOTO = "photo"
     TEXT = "text"
+    TEXT_AI = "text_ai"
     AUDIO = "audio"
     MIXED = "mixed"
     MANUAL = "manual"
