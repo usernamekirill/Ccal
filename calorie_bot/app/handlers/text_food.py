@@ -34,6 +34,7 @@ from calorie_bot.app.utils.draft_parse_context import (
     meal_parse_context,
     unresolved_clarifications_from_recognition,
 )
+from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="text_food")
 _log = logging.getLogger(__name__)
