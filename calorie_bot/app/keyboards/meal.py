@@ -1,5 +1,18 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+# Text for free-form gram reply (must stay in sync with handlers expecting ``mpt:x``).
+PORTION_QUICK_PICK_CUSTOM_LABEL = "✍️ Свой вариант"
+
+
+def format_portion_preset_button_label(grams: int, description: str | None) -> str:
+    """Telegram label for one gram preset: no duplicate when description matches the gram line."""
+    value = f"{int(grams)} г"
+    desc = (description or "").strip()
+    desc_short = desc[:32] if len(desc) > 32 else desc
+    if not desc_short or desc_short == value:
+        return value
+    return f"{value} · {desc_short}"
+
 
 def meal_confirmation_keyboard() -> InlineKeyboardMarkup:
     """Return meal draft confirmation keyboard (legacy path; aligns with photo review)."""
@@ -60,10 +73,9 @@ def contextual_portion_keyboard(presets: list[tuple[int, str]]) -> InlineKeyboar
     rows: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for grams, label in presets[:5]:
-        safe_label = (label or "").strip()[:32] or "вариант"
         row.append(
             InlineKeyboardButton(
-                text=f"{grams} г · {safe_label}",
+                text=format_portion_preset_button_label(int(grams), label),
                 callback_data=f"mpt:{int(grams)}",
             ),
         )
@@ -72,7 +84,7 @@ def contextual_portion_keyboard(presets: list[tuple[int, str]]) -> InlineKeyboar
             row = []
     if row:
         rows.append(row)
-    rows.append([InlineKeyboardButton(text="✍️ Свой вариант", callback_data="mpt:x")])
+    rows.append([InlineKeyboardButton(text=PORTION_QUICK_PICK_CUSTOM_LABEL, callback_data="mpt:x")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
