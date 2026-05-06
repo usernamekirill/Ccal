@@ -33,6 +33,9 @@ class FoodTextParserService:
         cd = ctx.get("current_draft")
         if isinstance(cd, dict):
             ctx["current_draft"] = calorie_service.result_from_dict(cd)
+        vb = ctx.get("vision_baseline")
+        if isinstance(vb, dict):
+            ctx["vision_baseline"] = calorie_service.result_from_dict(vb)
 
         draft = await TextFoodParser(self._settings, self._client).parse_food_text(text, ctx)
 

@@ -19,7 +19,6 @@ from calorie_bot.app.messages.texts import (
 )
 from calorie_bot.app.security.input_validation import ensure_meal_text_length
 from calorie_bot.app.services.calorie_service import CalorieService
-from calorie_bot.app.services.edit_interpreter_service import apply_instruction_to_food_result
 from calorie_bot.app.services.goal_service import GoalService
 from calorie_bot.app.services.onboarding_gate import food_logging_blocked_message
 from calorie_bot.app.services.user_service import UserService
@@ -28,6 +27,10 @@ from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.states.settings import SettingsStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
 from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
+from calorie_bot.app.utils.draft_parse_context import (
+    meal_parse_context,
+    unresolved_clarifications_from_recognition,
+)
 from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="text_food")
@@ -68,12 +71,18 @@ async def handle_waiting_for_weight(
         else infer_meal_type(datetime.now()).value
     )
     calorie_service = CalorieService()
+    pending_fr = calorie_service.result_from_dict(draft)
+    unresolved = unresolved_clarifications_from_recognition(pending_fr)
     await message.answer(TEXT_FOOD_PROCESSING_TEXT)
     try:
         result = await FoodTextParserService(settings).parse_food_text(
             message.text.strip(),
             default_meal_type=default_meal_type,
-            context={"current_draft": draft},
+            context=meal_parse_context(
+                data,
+                current_draft=draft,
+                unresolved_clarifications=unresolved,
+            ),
         )
     except Exception:
         _log.exception("text_meal_weight_followup_parse_failed")
@@ -165,14 +174,30 @@ async def handle_text_food_clarification(
     if data.get("clarification_mode") == "photo" and data.get("photo_food_result"):
         current = calorie_service.result_from_dict(data["photo_food_result"])
         ensure_meal_text_length(message.text, settings.max_meal_text_chars)
+        default_meal_type = str(data.get("default_meal_type", infer_meal_type(datetime.now()).value))
+        unresolved = unresolved_clarifications_from_recognition(current)
+        await message.answer(TEXT_FOOD_PROCESSING_TEXT)
         try:
-            updated = await apply_instruction_to_food_result(
-                settings,
+            updated = await FoodTextParserService(settings).parse_food_text(
                 message.text.strip(),
-                current,
-                session=session,
+                default_meal_type=default_meal_type,
+                context=meal_parse_context(
+                    data,
+                    current_draft=current,
+                    unresolved_clarifications=unresolved,
+                ),
             )
         except Exception:
+            _log.exception("photo_clarification_text_parse_failed")
+            await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+            return
+        updated = calorie_service.with_default_meal_type(updated, infer_meal_type(datetime.now()))
+        try:
+            updated = await calorie_service.enrich_after_text_processing(
+                updated, message.text, session, settings
+            )
+        except Exception:
+            _log.exception("photo_clarification_text_enrich_failed")
             await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
             return
         updated = calorie_service.apply_clarification_guards(updated)
@@ -199,11 +224,17 @@ async def handle_text_food_clarification(
         ensure_meal_text_length(message.text, settings.max_meal_text_chars)
         default_meal_type = str(data.get("default_meal_type", infer_meal_type(datetime.now()).value))
         await message.answer(TEXT_FOOD_PROCESSING_TEXT)
+        pending_fr = calorie_service.result_from_dict(data["pending_food_result_draft"])
+        unresolved = unresolved_clarifications_from_recognition(pending_fr)
         try:
             result = await FoodTextParserService(settings).parse_food_text(
                 message.text.strip(),
                 default_meal_type=default_meal_type,
-                context={"current_draft": data["pending_food_result_draft"]},
+                context=meal_parse_context(
+                    data,
+                    current_draft=data["pending_food_result_draft"],
+                    unresolved_clarifications=unresolved,
+                ),
             )
         except Exception:
             _log.exception("text_meal_clarification_parse_failed")
@@ -270,7 +301,10 @@ async def handle_text_food_clarification(
         result = await FoodTextParserService(settings).parse_food_text(
             message.text.strip(),
             default_meal_type=default_meal_type,
-            context={"prior_user_message": original_text} if original_text else None,
+            context=meal_parse_context(
+                data,
+                prior_user_message=original_text if original_text else None,
+            ),
         )
     except Exception:
         _log.exception("text_meal_clarification_parse_failed")
@@ -369,11 +403,16 @@ async def handle_draft_text_correction(
     default_mt = current.meal_type or infer_meal_type(datetime.now(timezone)).value
 
     await message.answer(TEXT_FOOD_PROCESSING_TEXT)
+    unresolved = unresolved_clarifications_from_recognition(current)
     try:
         updated = await FoodTextParserService(settings).parse_food_text(
             message.text.strip(),
             default_meal_type=default_mt,
-            context={"current_draft": current},
+            context=meal_parse_context(
+                data,
+                current_draft=current,
+                unresolved_clarifications=unresolved,
+            ),
         )
     except Exception:
         _log.exception("draft_text_correction_parse_failed")
@@ -501,6 +540,7 @@ async def handle_text_food(
     await state.update_data(
         photo_food_result=calorie_service.result_to_dict(result),
         food_source=MealSource.TEXT_AI.value,
+        vision_baseline_snapshot=None,
         pending_text_food=None,
         pending_food_result_draft=None,
         pending_food=None,

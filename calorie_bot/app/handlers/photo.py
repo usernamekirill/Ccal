@@ -1,3 +1,4 @@
+import copy
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -134,6 +135,7 @@ async def handle_photo(
         await state.set_state(MealStates.waiting_for_correction)
         tz = ZoneInfo(settings.timezone)
         default_mt = infer_meal_type(datetime.now(tz))
+        snap = copy.deepcopy(calorie_service.result_to_dict(result))
         await state.update_data(
             photo_food_result=calorie_service.result_to_dict(result),
             clarification_mode="photo",
@@ -142,9 +144,11 @@ async def handle_photo(
             pending_food_result_draft=None,
             photo_user_id=user.id,
             food_source=MealSource.PHOTO.value,
+            vision_baseline_snapshot=snap,
         )
         await message.answer(f"{TEXT_FOOD_CLARIFICATION_PREFIX}\n{result.clarification_question}")
         return
+    snap = copy.deepcopy(calorie_service.result_to_dict(result))
     await state.set_state(MealStates.photo_review)
     await state.update_data(
         photo_food_result=calorie_service.result_to_dict(result),
@@ -152,6 +156,7 @@ async def handle_photo(
         food_source=MealSource.PHOTO.value,
         clarification_mode=None,
         pending_food_result_draft=None,
+        vision_baseline_snapshot=snap,
     )
     await message.answer(
         calorie_service.format_result(result),

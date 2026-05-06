@@ -10,6 +10,7 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from calorie_bot.app.ai.prompts import TEXT_FOOD_STRUCTURED_PROMPT
+from calorie_bot.app.ai.nlp.draft_reconciliation import apply_reconciliation_validators
 from calorie_bot.app.ai.schemas import FoodItemRecognition, FoodRecognitionResult
 from calorie_bot.app.config import Settings
 from calorie_bot.app.domain import GramsSource, PortionUnitType
@@ -78,15 +79,20 @@ class StructuredTextMealResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     recognized: bool = True
+    intent: str | None = None
     mode: str | None = "create"
     needs_clarification: bool = False
     clarification_question: str | None = None
+    clarification_questions: list[str] = Field(default_factory=list)
     clarification_options: list[str] = Field(default_factory=list)
     meal_type: str | None = "unknown"
     items: list[StructuredTextMealItem] = Field(default_factory=list)
     totals: _TotalsPayload | None = None
     user_message_normalized: str | None = None
     reasoning_summary: str | None = None
+    user_named_products: list[str] = Field(default_factory=list)
+    removed_items: list[str] = Field(default_factory=list)
+    updated_items: list[str] = Field(default_factory=list)
 
     @field_validator("items", mode="before")
     @classmethod
@@ -96,6 +102,22 @@ class StructuredTextMealResponse(BaseModel):
         if not isinstance(v, list):
             raise ValueError("items_must_be_a_list")
         return v
+
+    @field_validator(
+        "clarification_questions",
+        "clarification_options",
+        "user_named_products",
+        "removed_items",
+        "updated_items",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_str_list(cls, v: Any) -> list[str]:
+        if v is None:
+            return []
+        if not isinstance(v, list):
+            return []
+        return [str(x).strip() for x in v if str(x).strip()]
 
 
 def _normalize_llm_unit(unit: str | None) -> Literal["g", "piece", "other"]:
@@ -224,6 +246,8 @@ def build_text_food_user_envelope(
     default_meal_type: str | None,
     current_draft: FoodRecognitionResult | None,
     prior_user_message: str | None = None,
+    vision_baseline: FoodRecognitionResult | None = None,
+    unresolved_clarifications: list[str] | None = None,
 ) -> str:
     """Build JSON string sent as the user message to the text-food chat completion."""
     from calorie_bot.app.nlp.meal_text_preprocess import normalize_meal_input_text
@@ -242,6 +266,12 @@ def build_text_food_user_envelope(
     else:
         payload["current_draft"] = None
         payload["conversation_mode"] = "create"
+    if vision_baseline and vision_baseline.items:
+        payload["vision_baseline"] = food_result_to_draft_context_payload(vision_baseline)
+    else:
+        payload["vision_baseline"] = None
+    ucl = [u.strip() for u in (unresolved_clarifications or []) if (u or "").strip()]
+    payload["unresolved_clarifications"] = ucl
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -268,6 +298,10 @@ def structured_meal_to_food_result(
 
     needs_clar = bool(data.needs_clarification)
     clar_q = (data.clarification_question or "").strip() or None
+    cqs_list = list(data.clarification_questions or [])
+    if cqs_list:
+        clar_q = "\n".join(f"• {x}" for x in cqs_list)
+        needs_clar = True
 
     if not data.recognized:
         needs_clar = True
@@ -340,15 +374,28 @@ class TextFoodParser:
                 extra={"type": type(current).__name__},
             )
             current = None
+        vb = ctx.get("vision_baseline")
+        if vb is not None and not isinstance(vb, FoodRecognitionResult):
+            _log.warning(
+                "text_food_invalid_vision_baseline_type",
+                extra={"type": type(vb).__name__},
+            )
+            vb = None
         prior_raw = ctx.get("prior_user_message")
         prior_s = prior_raw.strip() if isinstance(prior_raw, str) and prior_raw.strip() else None
+        ucl = ctx.get("unresolved_clarifications")
+        if not isinstance(ucl, list):
+            ucl = None
 
         envelope = build_text_food_user_envelope(
             user_text,
             default_meal_type=dmt,
             current_draft=current,
             prior_user_message=prior_s,
+            vision_baseline=vb,
+            unresolved_clarifications=ucl,
         )
+        calorie_service = CalorieService()
         try:
             response = await self._client.chat.completions.create(
                 model=self._settings.openai_correction_model,
@@ -365,6 +412,14 @@ class TextFoodParser:
                 data,
                 user_text=user_text,
                 default_meal_type=dmt,
+                calorie_service=calorie_service,
+            )
+            fr = apply_reconciliation_validators(
+                user_message_raw=user_text,
+                user_message_normalized=data.user_message_normalized,
+                calorie_service=calorie_service,
+                structured_user_named_products=list(data.user_named_products or []),
+                fr=fr,
             )
             return ParsedMealDraft(
                 recognized=bool(data.recognized),

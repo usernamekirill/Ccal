@@ -29,6 +29,10 @@ from calorie_bot.app.services.user_settings_service import create_user_settings_
 from calorie_bot.app.states.meal import MealStates
 from calorie_bot.app.texts.settings import AI_DISABLED_HINT
 from calorie_bot.app.utils.clarification_state import fsm_data_blocking_text_clarification
+from calorie_bot.app.utils.draft_parse_context import (
+    meal_parse_context,
+    unresolved_clarifications_from_recognition,
+)
 from calorie_bot.app.utils.meal_type import infer_meal_type
 
 router = Router(name="voice")
@@ -86,11 +90,17 @@ async def handle_voice_or_audio(
             else infer_meal_type(datetime.now(timezone)).value
         )
         await message.answer(TEXT_FOOD_PROCESSING_TEXT)
+        pending_fr = calorie_service.result_from_dict(data["pending_food_result_draft"])
+        unresolved = unresolved_clarifications_from_recognition(pending_fr)
         try:
             result = await FoodTextParserService(settings).parse_food_text(
                 transcript.strip(),
                 default_meal_type=default_meal_type,
-                context={"current_draft": data["pending_food_result_draft"]},
+                context=meal_parse_context(
+                    data,
+                    current_draft=data["pending_food_result_draft"],
+                    unresolved_clarifications=unresolved,
+                ),
             )
         except Exception:
             _log.exception("voice_weight_followup_parse_failed")
@@ -166,11 +176,16 @@ async def handle_voice_or_audio(
         ensure_meal_text_length(transcript.strip(), settings.max_meal_text_chars)
         default_mt = current.meal_type or infer_meal_type(datetime.now(timezone)).value
         await message.answer(TEXT_FOOD_PROCESSING_TEXT)
+        unresolved = unresolved_clarifications_from_recognition(current)
         try:
             updated = await FoodTextParserService(settings).parse_food_text(
                 transcript.strip(),
                 default_meal_type=default_mt,
-                context={"current_draft": current},
+                context=meal_parse_context(
+                    data,
+                    current_draft=current,
+                    unresolved_clarifications=unresolved,
+                ),
             )
         except Exception:
             _log.exception("voice_draft_edit_parse_failed")
@@ -271,6 +286,7 @@ async def handle_voice_or_audio(
     await state.update_data(
         photo_food_result=calorie_service.result_to_dict(result),
         food_source=MealSource.AUDIO.value,
+        vision_baseline_snapshot=None,
         voice_transcript=transcript,
         clarification_mode=None,
         pending_food_result_draft=None,
