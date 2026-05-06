@@ -483,66 +483,58 @@ async def handle_text_food(
             message.text,
             default_meal_type=default_meal_type.value,
         )
-    except Exception:
-        _log.exception("text_meal_parse_failed")
-        await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
-        return
-
-    calorie_service = CalorieService()
-    result = calorie_service.with_default_meal_type(result, default_meal_type)
-    try:
+        calorie_service = CalorieService()
+        result = calorie_service.with_default_meal_type(result, default_meal_type)
         result = await calorie_service.enrich_after_text_processing(
             result, message.text, session, settings
         )
-    except Exception:
-        _log.exception("text_meal_enrich_failed")
-        await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
-        return
-
-    result = calorie_service.apply_clarification_guards(result)
-    if calorie_service.requires_blocking_clarification(result):
-        next_state = (
-            MealStates.waiting_for_weight
-            if calorie_service.is_portion_weight_blocking_only(result)
-            else MealStates.waiting_for_correction
-        )
-        await state.set_state(next_state)
-        await state.update_data(
-            **fsm_data_blocking_text_clarification(
-                calorie_service,
-                result,
-                pending_text=message.text,
-                default_meal_type=default_meal_type.value,
-            ),
-        )
-        _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
-        await message.answer(_clar_body, reply_markup=_clar_kb)
-        return
-
-    if not result.items:
-        if result.needs_clarification and result.clarification_question:
-            await state.set_state(MealStates.waiting_for_correction)
-            await state.update_data(
-                pending_text_food=message.text,
-                default_meal_type=default_meal_type.value,
-                clarification_mode=None,
-                pending_food_result_draft=None,
-                pending_food=None,
+        result = calorie_service.apply_clarification_guards(result)
+        if calorie_service.requires_blocking_clarification(result):
+            next_state = (
+                MealStates.waiting_for_weight
+                if calorie_service.is_portion_weight_blocking_only(result)
+                else MealStates.waiting_for_correction
             )
-            await message.answer(format_clarification_followup_prompt(result))
-        else:
-            await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
-        return
+            await state.set_state(next_state)
+            await state.update_data(
+                **fsm_data_blocking_text_clarification(
+                    calorie_service,
+                    result,
+                    pending_text=message.text,
+                    default_meal_type=default_meal_type.value,
+                ),
+            )
+            _clar_body, _clar_kb = format_blocking_clarification_message(calorie_service, result)
+            await message.answer(_clar_body, reply_markup=_clar_kb)
+            return
 
-    await state.set_state(MealStates.photo_review)
-    await state.update_data(
-        photo_food_result=calorie_service.result_to_dict(result),
-        food_source=MealSource.TEXT_AI.value,
-        vision_baseline_snapshot=None,
-        pending_text_food=None,
-        pending_food_result_draft=None,
-        pending_food=None,
-        clarification_mode=None,
-    )
-    reply = calorie_service.format_result(result)
-    await message.answer(reply, reply_markup=photo_review_keyboard())
+        if not result.items:
+            if result.needs_clarification and result.clarification_question:
+                await state.set_state(MealStates.waiting_for_correction)
+                await state.update_data(
+                    pending_text_food=message.text,
+                    default_meal_type=default_meal_type.value,
+                    clarification_mode=None,
+                    pending_food_result_draft=None,
+                    pending_food=None,
+                )
+                await message.answer(format_clarification_followup_prompt(result))
+            else:
+                await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())
+            return
+
+        await state.set_state(MealStates.photo_review)
+        await state.update_data(
+            photo_food_result=calorie_service.result_to_dict(result),
+            food_source=MealSource.TEXT_AI.value,
+            vision_baseline_snapshot=None,
+            pending_text_food=None,
+            pending_food_result_draft=None,
+            pending_food=None,
+            clarification_mode=None,
+        )
+        reply = calorie_service.format_result(result)
+        await message.answer(reply, reply_markup=photo_review_keyboard())
+    except Exception:
+        _log.exception("text_meal_pipeline_failed")
+        await message.answer(RECOGNITION_UNCERTAIN_TEXT, reply_markup=recognition_trouble_keyboard())

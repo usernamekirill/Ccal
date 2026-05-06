@@ -1385,10 +1385,15 @@ def _validate_optional_non_negative(value: float | None, field_name: str) -> Non
 
 def normalize_food_name(name: str) -> str:
     """Normalize food names for display and cache lookup."""
-    normalized = name.strip().lower().replace("ё", "е")
+    raw = (name or "").strip()
+    normalized = raw.lower().replace("ё", "е")
     normalized = re.sub(r"\s+", " ", normalized)
     normalized = re.sub(r"[^0-9a-zа-я\s-]", "", normalized)
-    return normalized.strip()
+    out = normalized.strip()
+    if out:
+        return out
+    # Avoid empty names: FoodItemRecognition requires min_length=1; otherwise validate_food_result crashes.
+    return raw if raw else "еда"
 
 
 def _grams_source_from_str(value: str | None) -> GramsSource | None:

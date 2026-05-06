@@ -52,6 +52,36 @@ def test_normalizes_food_name() -> None:
     assert normalize_food_name("  Гречка, с МАСЛОМ!  ") == "гречка с маслом"
 
 
+def test_normalize_food_name_never_empty() -> None:
+    """Stripping punctuation/emoji must not yield an empty name (Pydantic min_length on items)."""
+    assert normalize_food_name("🍰🍯") == "🍰🍯"
+    assert normalize_food_name("...") == "..."
+    assert normalize_food_name("   ") == "еда"
+
+
+def test_validate_food_result_accepts_emoji_only_display_name() -> None:
+    """Emoji-only labels from the model should not crash validation."""
+    svc = CalorieService()
+    from calorie_bot.app.ai.schemas import FoodItemRecognition, FoodRecognitionResult
+
+    item = FoodItemRecognition.model_validate(
+        {
+            "name": "🍰",
+            "portion_description": "100 г",
+            "calories": 200,
+            "estimated_grams": 100.0,
+        }
+    )
+    r = FoodRecognitionResult(
+        items=[item],
+        total_calories=200,
+        overall_confidence=0.9,
+        comment="x",
+    )
+    out = svc.validate_food_result(r)
+    assert out.items[0].name == "🍰"
+
+
 def test_calculates_item_and_meal_calories() -> None:
     """Calorie service should calculate item and meal calories."""
     service = CalorieService()
