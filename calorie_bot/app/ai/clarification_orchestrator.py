@@ -174,6 +174,21 @@ def multi_item_missing_weight_clarification_body(ctx: ClarificationLLMContext) -
     if not missing:
         return None
     title = f"{ctx.dish_emoji} {ctx.dish_line}"
+    total = len(ctx.recognized_items)
+    partial = total >= 2 and len(missing) < total
+    if partial:
+        lines: list[str] = []
+        for it in missing:
+            nm = str(it.get("name") or "Позиция").strip()
+            em = food_line_emoji(nm)
+            lines.append(f"{em} {nm} — сколько граммов?")
+        block = "\n".join(lines)
+        return (
+            f"{title}\n\n"
+            "Осталось уточнить:\n\n"
+            f"{block}\n\n"
+            "Можно написать одной фразой — например, с граммами ✍️"
+        )
     bullets = "\n".join(
         f"• {str(it.get('name') or 'Позиция').strip()} — сколько граммов?" for it in missing
     )

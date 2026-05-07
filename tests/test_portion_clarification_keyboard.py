@@ -46,8 +46,8 @@ def test_case1_multi_item_dish_buttons_tvorog_med() -> None:
     joined = " ".join(texts + cbs).lower()
     assert "творога и меда" not in joined
     assert "100 г творога и меда" not in joined
-    assert any(cb.startswith(f"{CLARIFY_WEIGHT_PREFIX}:0:") for cb in cbs)
-    assert any(cb.startswith(f"{CLARIFY_WEIGHT_PREFIX}:1:") for cb in cbs)
+    assert any(":item=0:weight=" in cb for cb in cbs)
+    assert any(":item=1:weight=" in cb for cb in cbs)
     assert any(cb == f"{CLARIFY_WEIGHT_PREFIX}:x" for cb in cbs)
 
 
@@ -79,10 +79,11 @@ def test_case2_single_item_buttons_plain_grams() -> None:
     )
 
 
-def test_case3_verbose_callback_equals_indexed_parse() -> None:
+def test_case3_compact_indexed_still_parses() -> None:
     v = parse_quick_pick_grams_raw("item_index=0:weight=150")
     c = parse_quick_pick_grams_raw("0:150")
-    assert v == c
+    w = parse_quick_pick_grams_raw("item=0:weight=150")
+    assert v == c == w
     assert v.kind == "indexed" and v.item_index == 0 and v.grams == 150
 
 

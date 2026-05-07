@@ -60,9 +60,17 @@ class PortionQuickPickParsed:
 
 
 def parse_quick_pick_grams_raw(raw: str) -> PortionQuickPickParsed:
-    """Parse payload after ``mpt:`` or ``clarify_weight:`` (supports ``item_index=0:weight=150``)."""
+    """Parse payload after ``mpt:`` or ``clarify_weight:`` (supports ``item_index=0:weight=150``, ``item=0:weight=120``)."""
     if raw == "x":
         return PortionQuickPickParsed("custom")
+    if raw.startswith("item="):
+        try:
+            left, right = raw.split(":", 1)
+            idx = int(left.split("=", 1)[1].strip())
+            w = int(right.split("=", 1)[1].strip())
+            return PortionQuickPickParsed("indexed", idx, w)
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"invalid_item_weight_payload:{raw!r}") from e
     if "item_index=" in raw and "weight=" in raw:
         try:
             left, right = raw.split(":", 1)
@@ -172,7 +180,7 @@ def contextual_portion_keyboard(
             cb = f"mpt:{g}"
         else:
             text = format_multi_item_portion_button_label(product_name, g)
-            cb = f"{CLARIFY_WEIGHT_PREFIX}:{int(item_index if item_index is not None else 0)}:{g}"
+            cb = f"{CLARIFY_WEIGHT_PREFIX}:item={int(item_index if item_index is not None else 0)}:weight={g}"
         row.append(InlineKeyboardButton(text=text, callback_data=cb))
         if len(row) == 2:
             rows.append(row)
